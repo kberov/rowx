@@ -57,3 +57,10 @@ func TestTable(t *testing.T) {
 		t.Logf("Modelx.Data: %#v\n", m.Data)
 	}
 }
+
+func TestNewNoData(t *testing.T) {
+	m := modelx.NewModel[Users]()
+	if m == nil {
+		t.Fatal("Could not instantiate Modelx")
+	}
+}

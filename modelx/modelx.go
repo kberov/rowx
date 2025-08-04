@@ -75,7 +75,7 @@ type Modelx[M SqlxRow] struct {
 
 // NewModel returns a new instance of a table model with optional slice of
 // provided data as parameter.
-func NewModel[M SqlxRow](data []M) SqlxModel {
+func NewModel[M SqlxRow](data ...M) SqlxModel {
 	if data != nil {
 		return &Modelx[M]{Data: data}
 	}
