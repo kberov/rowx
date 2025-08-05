@@ -11,7 +11,7 @@ import (
 type SQLMap map[string]any
 
 var QueryTemplates = SQLMap{
-	"INSERT":  `INSERT INTO ${table} (${columns}) VALUES(${placeholders})`,
+	"INSERT":  `INSERT INTO ${table} (${columns}) VALUES ${placeholders}`,
 	"GetByID": `SELECT * FROM ${table} WHERE id=?`,
 	"SELECT":  `SELECT ${columns} FROM ${table} ${WHERE} LIMIT ${limit} OFFSET ${offset}`,
 }

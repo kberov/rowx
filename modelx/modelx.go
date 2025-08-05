@@ -5,6 +5,7 @@ package modelx
 import (
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -44,7 +45,8 @@ func DB() *sqlx.DB {
 }
 
 /*
-SqlxRow is an interface and generic constraint
+SqlxRow is an interface and generic constraint for rows. TODO? See if we need
+to  implement this interface or the Modelx will work well.
 */
 type SqlxRow interface {
 	// Insert this prepared record into it's table.
@@ -62,6 +64,7 @@ SqlxModel is an interface and generic constraint.
 */
 type SqlxModel[R SqlxRow] interface {
 	TableName() string
+	Columns() []string
 	Data() []R
 	SqlxRow
 }
@@ -70,8 +73,9 @@ type Modelx[R SqlxRow] struct {
 	// Table allows to set explicitly the table name for this model. Otherwise
 	// it is guessed and set from the type of the Data slice upon first use of
 	// TableName().
-	Table string
-	data  []R
+	Table   string
+	columns []string
+	data    []R
 }
 
 // NewModel returns a new instance of a table model with optional slice of
@@ -92,15 +96,10 @@ func (m *Modelx[R]) TableName() string {
 	return m.Table
 }
 
-func (m *Modelx[R]) Data() []R {
-	return m.data
-}
-
 // modelToTable converts struct type name like *model.Users to
-// 'users' and returns it.
+// 'users' and returns it. Panics if unsuccessful.
 func modelToTable[R SqlxRow](rows R) string {
 	typestr := sprintf("%T", rows)
-	println("typestr:", typestr)
 	_, table, ok := strings.Cut(typestr, ".")
 	if ok {
 		return camelToSnakeCase(table)
@@ -140,4 +139,27 @@ func lowerLetter(snakeCase *strings.Builder, r rune, wordBegins, prevWasUpper bo
 	}
 	snakeCase.WriteRune(r)
 	return wordBegins, prevWasUpper
+}
+
+// Data returns the slice of structs, passed to NewModel().
+func (m *Modelx[R]) Data() []R {
+	return m.data
+}
+
+// Columns returns a slice with the names of the columns of the table in no
+// particular order. TODO! See if sqlx copes with the given order in an insert
+// statement.
+func (m *Modelx[R]) Columns() []string {
+	if m.columns != nil {
+		return m.columns
+	}
+	colMap := DB().Mapper.FieldMap(reflect.ValueOf(new(R)))
+	m.columns = make([]string, 0, len(colMap)/2)
+	for k := range colMap {
+		if strings.Contains(k, `.`) {
+			continue
+		}
+		m.columns = append(m.columns, k)
+	}
+	return m.columns
 }

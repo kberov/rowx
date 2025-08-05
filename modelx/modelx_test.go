@@ -22,8 +22,13 @@ id INTEGER PRIMARY KEY AUTOINCREMENT,
 name VARCHAR(100) UNIQUE NOT NULL,
 changed_by INTEGER DEFAULT NULL REFERENCES users(id) ON DELETE SET DEFAULT);
 `
+var users = []Users{
+	Users{ID: 1, LoginName: "first"},
+	Users{ID: 2, LoginName: "the_second"},
+}
 
-func MultiExec(e sqlx.Execer, query string) {
+// Stollen from sqlx_test.go
+func multiExec(e sqlx.Execer, query string) {
 	stmts := strings.Split(query, ";\n")
 	if len(strings.Trim(stmts[len(stmts)-1], " \n\t\r")) == 0 {
 		stmts = stmts[:len(stmts)-1]
@@ -45,13 +50,13 @@ type Users struct {
 
 func init() {
 	modelx.DSN = ":memory:"
-	MultiExec(modelx.DB(), schema)
+	multiExec(modelx.DB(), schema)
 }
 
 func TestTable(t *testing.T) {
 	m := &modelx.Modelx[Users]{}
 	if table := m.TableName(); table != "users" {
-		t.Fatal("wrong table", table)
+		t.Errorf("wrong table '%s'", table)
 	} else {
 		t.Logf("Instantited type: %#v\n TableName: %s\n", m, table)
 		t.Logf("Modelx.Data: %#v\n", m.Data())
@@ -61,17 +66,29 @@ func TestTable(t *testing.T) {
 func TestNewNoData(t *testing.T) {
 	m := modelx.NewModel[Users]()
 	if m == nil {
-		t.Fatal("Could not instantiate Modelx")
+		t.Error("Could not instantiate Modelx")
 	}
 }
 
 func TestNewWithData(t *testing.T) {
-	users := []Users{
-		Users{ID: 1, LoginName: "first"},
-		Users{ID: 2, LoginName: "the_second"},
-	}
 	m := modelx.NewModel[Users](users...)
 	if len(m.Data()) != 2 {
-		t.Fatal("No data, but it was expected!")
+		t.Error("No data, but it was expected!")
 	}
+}
+
+func TestColumnsWithData(t *testing.T) {
+	m := modelx.NewModel[Users](users...)
+	if len(m.Columns()) == 0 {
+		t.Errorf("Expected to have columns but we did not find any.")
+	}
+	t.Logf("columns are: %#v", m.Columns())
+}
+
+func TestColumnsNoData(t *testing.T) {
+	m := modelx.NewModel[Users]()
+	if len(m.Columns()) == 0 {
+		t.Errorf("Expected to have columns but we did not find any.")
+	}
+	t.Logf("columns are: %#v", m.Columns())
 }
