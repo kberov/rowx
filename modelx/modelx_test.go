@@ -92,3 +92,12 @@ func TestColumnsNoData(t *testing.T) {
 	}
 	t.Logf("columns are: %#v", m.Columns())
 }
+
+func TestSingleInsert(t *testing.T) {
+	m := modelx.NewModel[Users](users[0])
+	m.Insert()
+}
+func TestMultyInsert(t *testing.T) {
+	m := modelx.NewModel[Users](users...)
+	m.Insert()
+}

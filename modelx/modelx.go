@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/labstack/gommon/log"
+	"github.com/valyala/fasttemplate"
 )
 
 var (
@@ -66,6 +68,7 @@ type SqlxModel[R SqlxRow] interface {
 	TableName() string
 	Columns() []string
 	Data() []R
+	Insert()
 	SqlxRow
 }
 
@@ -162,4 +165,32 @@ func (m *Modelx[R]) Columns() []string {
 		m.columns = append(m.columns, k)
 	}
 	return m.columns
+}
+
+func (m *Modelx[R]) Insert() {
+	dataLen := len(m.Data())
+	if dataLen == 0 {
+		panic("Cannot insert when no data is provided!")
+	}
+	var (
+		template string
+		ok       bool
+	)
+	if template, ok = QueryTemplates[`INSERT`].(string); !ok {
+		panic("Query tmplate for `INSERT` was not found!")
+	}
+	colCount := len(m.Columns())
+	placeholders := strings.Join(slices.Repeat([]string{"?"}, colCount), ",") // ?,?,?
+	placeholders = sprintf("(%s)", placeholders)
+	if dataLen > 1 {
+		placeholders = strings.Join(slices.Repeat([]string{placeholders}, dataLen), ",\n")
+	}
+	templateMap := map[string]any{
+		`columns`:      strings.Join(m.Columns(), ","),
+		`table`:        m.TableName(),
+		`placeholders`: placeholders,
+	}
+	println(placeholders, sprintf("templateMap: %#v; template: '%s'", templateMap, template))
+	query := fasttemplate.ExecuteStringStd(template, "${", "}", templateMap)
+	println(query)
 }
