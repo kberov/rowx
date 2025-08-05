@@ -50,7 +50,7 @@ type SqlxRow interface {
 	// Insert this prepared record into it's table.
 	// Insert() error
 	// Select (Get) one record by ID
-	//Get() error
+	// Get() error
 	// Update this record.
 	// Update() error
 	// Delete this record
@@ -60,30 +60,31 @@ type SqlxRow interface {
 /*
 SqlxModel is an interface and generic constraint.
 */
-type SqlxModel interface {
+type SqlxModel[R SqlxRow] interface {
 	TableName() string
+	Data() []R
 	SqlxRow
 }
 
-type Modelx[M SqlxRow] struct {
+type Modelx[R SqlxRow] struct {
 	// Table allows to set explicitly the table name for this model. Otherwise
 	// it is guessed and set from the type of the Data slice upon first use of
 	// TableName().
 	Table string
-	Data  []M
+	data  []R
 }
 
 // NewModel returns a new instance of a table model with optional slice of
-// provided data as parameter.
-func NewModel[M SqlxRow](data ...M) SqlxModel {
-	if data != nil {
-		return &Modelx[M]{Data: data}
+// provided data rows as a variadic parameter.
+func NewModel[R SqlxRow](rows ...R) SqlxModel[R] {
+	if rows != nil {
+		return &Modelx[R]{data: rows}
 	}
-	return &Modelx[M]{}
+	return &Modelx[R]{}
 }
 
 // TableName returns the guessed table name from the paramaetrized Data type.
-func (m *Modelx[M]) TableName() string {
+func (m *Modelx[R]) TableName() string {
 	if m.Table != "" {
 		return m.Table
 	}
@@ -91,9 +92,13 @@ func (m *Modelx[M]) TableName() string {
 	return m.Table
 }
 
+func (m *Modelx[R]) Data() []R {
+	return m.data
+}
+
 // modelToTable converts struct type name like *model.Users to
 // 'users' and returns it.
-func modelToTable[R any](rows R) string {
+func modelToTable[R SqlxRow](rows R) string {
 	typestr := sprintf("%T", rows)
 	println("typestr:", typestr)
 	_, table, ok := strings.Cut(typestr, ".")

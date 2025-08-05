@@ -54,7 +54,7 @@ func TestTable(t *testing.T) {
 		t.Fatal("wrong table", table)
 	} else {
 		t.Logf("Instantited type: %#v\n TableName: %s\n", m, table)
-		t.Logf("Modelx.Data: %#v\n", m.Data)
+		t.Logf("Modelx.Data: %#v\n", m.Data())
 	}
 }
 
@@ -62,5 +62,16 @@ func TestNewNoData(t *testing.T) {
 	m := modelx.NewModel[Users]()
 	if m == nil {
 		t.Fatal("Could not instantiate Modelx")
+	}
+}
+
+func TestNewWithData(t *testing.T) {
+	users := []Users{
+		Users{ID: 1, LoginName: "first"},
+		Users{ID: 2, LoginName: "the_second"},
+	}
+	m := modelx.NewModel[Users](users...)
+	if len(m.Data()) != 2 {
+		t.Fatal("No data, but it was expected!")
 	}
 }
