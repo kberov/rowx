@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -19,7 +20,8 @@ import (
 var (
 	// DefaultLogHeader is a template for modelx logging
 	DefaultLogHeader = `${prefix}:${time_rfc3339}:${level}:${short_file}:${line}`
-
+	// Default LIMIT for SQL queries.
+	DefaultLimit = 100
 	// DSN must be set before using DB() function.
 	DSN string
 	// Logger must be instantiated before using any function from this package.
@@ -69,6 +71,7 @@ type SqlxModel[R SqlxRow] interface {
 	Columns() []string
 	Data() []R
 	Insert() (sql.Result, error)
+	Select(string, any, [2]int) error
 	SqlxRow
 }
 
@@ -177,21 +180,15 @@ func (m *Modelx[R]) Insert() (sql.Result, error) {
 	if dataLen == 0 {
 		panic("Cannot insert when no data is provided!")
 	}
-	var (
-		template string
-		ok       bool
-	)
-	if template, ok = QueryTemplates[`INSERT`].(string); !ok {
-		panic("Query template for `INSERT` was not found in modelx.QueryTemplates!")
-	}
+	template := getQueryTemplate(`INSERT`)
 	placeholders := strings.Join(m.Columns(), ",:") // :id,:login_name,:changed_by...
 	placeholders = sprintf("(:%s)", placeholders)
-	templateMap := map[string]any{
+	stash := map[string]any{
 		`columns`:      strings.Join(m.Columns(), ","),
 		`table`:        m.Table(),
 		`placeholders`: placeholders,
 	}
-	query := fasttemplate.ExecuteStringStd(template, "${", "}", templateMap)
+	query := fasttemplate.ExecuteStringStd(template, "${", "}", stash)
 	// Logger.Debugf("INSERT query from fasttemplate: %s", query)
 	if dataLen > 1 {
 		tx := DB().MustBegin()
@@ -212,4 +209,41 @@ func (m *Modelx[R]) Insert() (sql.Result, error) {
 
 	}
 	return DB().NamedExec(query, m.Data()[0])
+}
+
+func getQueryTemplate(key string) string {
+	var (
+		template string
+		ok       bool
+	)
+	if template, ok = QueryTemplates[key].(string); !ok {
+		panic("Query template for `INSERT` was not found in modelx.QueryTemplates!")
+	}
+	return template
+}
+
+// Select prepares and executes a [sqlx.NamedQuery]
+func (m *Modelx[R]) Select(where string, bindData any, limitAndOffcet [2]int) error {
+	template := getQueryTemplate(`SELECT`)
+	if limitAndOffcet[0] == 0 {
+		limitAndOffcet[0] = DefaultLimit
+	}
+	if bindData == nil {
+		bindData = map[string]any{}
+	}
+	stash := map[string]any{
+		`columns`: strings.Join(m.Columns(), ","),
+		`table`:   m.Table(),
+		`WHERE`:   where,
+		`limit`:   strconv.Itoa(limitAndOffcet[0]),
+		`offset`:  strconv.Itoa(limitAndOffcet[1]),
+	}
+	query := fasttemplate.ExecuteStringStd(template, "${", "}", stash)
+	Logger.Debugf("Constructed query : %s", query)
+	if stmt, err := DB().PrepareNamed(query); err != nil {
+		return fmt.Errorf("error from DB().PrepareNamed(SQL): %w", err)
+	} else if err = stmt.Select(&m.data, bindData); err != nil {
+		return fmt.Errorf("error from stmt.Select(...): %w", err)
+	}
+	return nil
 }

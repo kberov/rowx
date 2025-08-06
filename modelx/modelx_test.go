@@ -119,9 +119,20 @@ func TestSingleInsert(t *testing.T) {
 	}
 	t.Logf(`First selected user: %#v`, u)
 }
+
 func TestMultyInsert(t *testing.T) {
-	t.Logf("Starting from second user: %#v;", users[1:])
+	// t.Logf("Starting from second user: %#v;", users[1:])
 	m := modelx.NewModel[Users](users[1:]...)
 	r, e := m.Insert()
 	t.Logf("sql.Result:%#v; Error:%#v;", r, e)
+}
+
+func TestSimplestSelect(t *testing.T) {
+
+	m := modelx.NewModel[Users]()
+	err := m.Select("", nil, [2]int{0, 0})
+	if err != nil {
+		t.Errorf("Error: %#v", err)
+	}
+	t.Logf("Returned Data: %#v", m.Data())
 }
