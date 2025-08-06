@@ -10,6 +10,11 @@ import (
 // in some method.
 type SQLMap map[string]any
 
+// QueryTemplates is an SQLMap (~map[string]any), containing templates from which the
+// queries are built. Some of the values are parts of other queries and may be
+// used for replacement in other entries, used as templates. We use
+// [fasttemplate.ExecuteStringStd] to construct ready for use by [sqlx]
+// queries.
 var QueryTemplates = SQLMap{
 	"INSERT":  `INSERT INTO ${table} (${columns}) VALUES ${placeholders}`,
 	"GetByID": `SELECT * FROM ${table} WHERE id=?`,

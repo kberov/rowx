@@ -3,10 +3,10 @@
 package modelx
 
 import (
+	"database/sql"
 	"fmt"
 	"os"
 	"reflect"
-	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -24,14 +24,14 @@ var (
 	DSN string
 	// Logger must be instantiated before using any function from this package.
 	Logger *log.Logger
-	// global is a singleton connection to the database.
-	global  *sqlx.DB
-	sprintf = fmt.Sprintf
+	// singleDB is a singleton connection to the database.
+	singleDB *sqlx.DB
+	sprintf  = fmt.Sprintf
 )
 
 func DB() *sqlx.DB {
-	if global != nil {
-		return global
+	if singleDB != nil {
+		return singleDB
 	}
 	if Logger == nil {
 		Logger = log.New("DB")
@@ -41,9 +41,9 @@ func DB() *sqlx.DB {
 	}
 	Logger.Debugf("Connecting to database '%s'...", DSN)
 
-	global = sqlx.MustConnect("sqlite3", DSN)
-	global.MapperFunc(camelToSnakeCase)
-	return global
+	singleDB = sqlx.MustConnect("sqlite3", DSN)
+	singleDB.MapperFunc(camelToSnakeCase)
+	return singleDB
 }
 
 /*
@@ -65,18 +65,18 @@ type SqlxRow interface {
 SqlxModel is an interface and generic constraint.
 */
 type SqlxModel[R SqlxRow] interface {
-	TableName() string
+	Table() string
 	Columns() []string
 	Data() []R
-	Insert()
+	Insert() (sql.Result, error)
 	SqlxRow
 }
 
 type Modelx[R SqlxRow] struct {
-	// Table allows to set explicitly the table name for this model. Otherwise
+	// table allows to set explicitly the table name for this model. Otherwise
 	// it is guessed and set from the type of the Data slice upon first use of
 	// TableName().
-	Table   string
+	table   string
 	columns []string
 	data    []R
 }
@@ -90,13 +90,13 @@ func NewModel[R SqlxRow](rows ...R) SqlxModel[R] {
 	return &Modelx[R]{}
 }
 
-// TableName returns the guessed table name from the paramaetrized Data type.
-func (m *Modelx[R]) TableName() string {
-	if m.Table != "" {
-		return m.Table
+// Table returns the guessed table name from the parametrized Data type.
+func (m *Modelx[R]) Table() string {
+	if m.table != "" {
+		return m.table
 	}
-	m.Table = modelToTable(m.Data)
-	return m.Table
+	m.table = modelToTable(new(R))
+	return m.table
 }
 
 // modelToTable converts struct type name like *model.Users to
@@ -167,8 +167,13 @@ func (m *Modelx[R]) Columns() []string {
 	return m.columns
 }
 
-func (m *Modelx[R]) Insert() {
+// Insert inserts a set of SqlxRow instances and returns sql.Result and error.
+// If len(m.Data())>1 the data is inserted in a transaction. If
+// len(m.Data())=0, it panics. If [QueryTemplates][`INSERT`] is not found, it
+// panics.
+func (m *Modelx[R]) Insert() (sql.Result, error) {
 	dataLen := len(m.Data())
+	// Logger.Debugf("Data: %#v", m.data)
 	if dataLen == 0 {
 		panic("Cannot insert when no data is provided!")
 	}
@@ -177,20 +182,34 @@ func (m *Modelx[R]) Insert() {
 		ok       bool
 	)
 	if template, ok = QueryTemplates[`INSERT`].(string); !ok {
-		panic("Query tmplate for `INSERT` was not found!")
+		panic("Query template for `INSERT` was not found in modelx.QueryTemplates!")
 	}
-	colCount := len(m.Columns())
-	placeholders := strings.Join(slices.Repeat([]string{"?"}, colCount), ",") // ?,?,?
-	placeholders = sprintf("(%s)", placeholders)
-	if dataLen > 1 {
-		placeholders = strings.Join(slices.Repeat([]string{placeholders}, dataLen), ",\n")
-	}
+	placeholders := strings.Join(m.Columns(), ",:") // :id,:login_name,:changed_by...
+	placeholders = sprintf("(:%s)", placeholders)
 	templateMap := map[string]any{
 		`columns`:      strings.Join(m.Columns(), ","),
-		`table`:        m.TableName(),
+		`table`:        m.Table(),
 		`placeholders`: placeholders,
 	}
-	println(placeholders, sprintf("templateMap: %#v; template: '%s'", templateMap, template))
 	query := fasttemplate.ExecuteStringStd(template, "${", "}", templateMap)
-	println(query)
+	// Logger.Debugf("INSERT query from fasttemplate: %s", query)
+	if dataLen > 1 {
+		tx := DB().MustBegin()
+		var (
+			r sql.Result
+			e error
+		)
+		for _, row := range m.Data() {
+			r, e := tx.NamedExec(query, row)
+			if e != nil {
+				return r, e
+			}
+		}
+		if e := tx.Commit(); e != nil {
+			return nil, e
+		}
+		return r, e
+
+	}
+	return DB().NamedExec(query, m.Data()[0])
 }
