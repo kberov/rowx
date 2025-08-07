@@ -18,10 +18,11 @@ var (
 		[fasttemplate.ExecuteStringStd] to construct ready for use by [sqlx] queries.
 	*/
 	QueryTemplates = SQLMap{
+		`GetByID`: `SELECT * FROM ${table} WHERE id=:id`,
 		`INSERT`:  `INSERT INTO ${table} (${columns}) VALUES ${placeholders}`,
-		`GetByID`: `SELECT * FROM ${table} WHERE id=?`,
 		`SELECT`:  `SELECT ${columns} FROM ${table} ${WHERE} LIMIT ${limit} OFFSET ${offset}`,
 		`UPDATE`:  `UPDATE ${table} ${SET} ${WHERE}`,
+		`DELETE`:  `DELETE FROM ${table} ${WHERE}`,
 	}
 	replace = fasttemplate.ExecuteStringStd
 )

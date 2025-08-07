@@ -68,7 +68,8 @@ type SqlxRow interface {
 }
 
 /*
-SqlxModel is an interface and generic constraint for a set of records.
+SqlxModel is an interface and generic constraint for working with set of
+datavase records.
 */
 type SqlxModel[R SqlxRow] interface {
 	SqlxRow
@@ -78,6 +79,7 @@ type SqlxModel[R SqlxRow] interface {
 	Insert() (sql.Result, error)
 	Select(string, any, [2]int) error
 	Update(map[string]any, string, map[string]any) (sql.Result, error)
+	Delete(string, map[string]any) (sql.Result, error)
 }
 
 /*
@@ -308,4 +310,17 @@ func buildSET(bindData map[string]any) string {
 	// return strings.TrimRight(set.String(), `,`)
 	setStr := set.String()
 	return setStr[:len(setStr)-1]
+}
+
+/*
+Delete deletes records.
+*/
+func (m *Modelx[R]) Delete(where string, bindData map[string]any) (sql.Result, error) {
+	stash := map[string]any{
+		`table`: m.Table(),
+		`WHERE`: where,
+	}
+	query := RenderSQLFor(`DELETE`, stash)
+	Logger.Debugf("Constructed query : %s", query)
+	return DB().NamedExec(query, bindData)
 }

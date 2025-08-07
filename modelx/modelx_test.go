@@ -240,3 +240,40 @@ func TestUpdate(t *testing.T) {
 		})
 	}
 }
+
+func TestDelete(t *testing.T) {
+	m := modelx.NewModel[Users]()
+	tests := []struct {
+		name, where string
+		bind        map[string]any
+		affected    int64
+	}{
+		{
+			name:     `One`,
+			where:    `WHERE id=:some_id`,
+			bind:     map[string]any{`some_id`: 1},
+			affected: 1,
+		},
+		{
+			name:     `Many`,
+			where:    `WHERE id > 1`,
+			affected: 2,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r, e := m.Delete(tc.where, tc.bind)
+			if e != nil {
+				t.Errorf("Error deleting one record: %#v", e)
+				return
+			}
+			if rows, e := r.RowsAffected(); e != nil {
+				t.Errorf("Error: %v", e)
+			} else if rows != tc.affected {
+				t.Errorf("Expected rows to be affected were %d. Got %d", tc.affected, rows)
+			} else {
+				t.Logf("RowsAffected: %d", rows)
+			}
+		})
+	}
+}
