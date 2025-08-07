@@ -1,10 +1,15 @@
-// Package modelx provides an interface and an abstract generic data type
-// implementing it for use with github.com/jmoiron/sqlx.
+/*
+Package modelx provides two interfaces and an abstract generic data types
+implementing them to work easily with database records and sets of records.
+Underneath github.com/jmoiron/sqlx is used. It is just an object mapper. The
+relations' constraints are left to be managed by the database
+*/
 package modelx
 
 import (
 	"database/sql"
 	"fmt"
+	"maps"
 	"os"
 	"reflect"
 	"strconv"
@@ -49,14 +54,14 @@ func DB() *sqlx.DB {
 }
 
 /*
-SqlxRow is an interface and generic constraint for rows. TODO? See if we need
-to  implement this interface or the Modelx will work well.
+SqlxRow is an interface and generic constraint for one record. TODO? See if we
+need to implement this interface or the Modelx will be enough.
 */
 type SqlxRow interface {
 	// Insert this prepared record into it's table.
-	// Insert() error
+	// Insert() error - TODO: insert record with specific ID value
 	// Select (Get) one record by ID
-	// Get() error
+	// GetByID() error - TODO
 	// Update this record.
 	// Update() error
 	// Delete this record
@@ -64,24 +69,32 @@ type SqlxRow interface {
 }
 
 /*
-SqlxModel is an interface and generic constraint.
+SqlxModel is an interface and generic constraint for a set of records.
 */
 type SqlxModel[R SqlxRow] interface {
+	SqlxRow
 	Table() string
 	Columns() []string
 	Data() []R
 	Insert() (sql.Result, error)
 	Select(string, any, [2]int) error
-	SqlxRow
+	Update(map[string]any, string, map[string]any) (sql.Result, error)
 }
 
+/*
+Modelx implements SqlxModel interface and can be embedded (extended) to
+customise its behaviour for your own needs.
+*/
 type Modelx[R SqlxRow] struct {
+	// data is a slice of rows, retrieved from the database or to be inserted,
+	// updated or deleted.
+	data []R
 	// table allows to set explicitly the table name for this model. Otherwise
-	// it is guessed and set from the type of the Data slice upon first use of
-	// TableName().
-	table   string
+	// it is guessed and set from the type of the first element of Data slice
+	// upon first use of Table().
+	table string
+	// columns of the table
 	columns []string
-	data    []R
 }
 
 // NewModel returns a new instance of a table model with optional slice of
@@ -147,14 +160,17 @@ func lowerLetter(snakeCase *strings.Builder, r rune, wordBegins, prevWasUpper bo
 	return wordBegins, prevWasUpper
 }
 
-// Data returns the slice of structs, passed to NewModel().
+// Data returns the slice of structs, passed to NewModel(). It may return nil
+// if no rows are passed.
 func (m *Modelx[R]) Data() []R {
 	return m.data
 }
 
-// Columns returns a slice with the names of the columns of the table in no
-// particular order. TODO! See if sqlx copes with the given order in an insert
-// statement.
+/*
+Columns returns a slice with the names of the columns of the table in no
+particular order. Because the order is different each time, we must use
+internally NamedQuery, NamedExec, PrepareNamed etc. from sqlx.
+*/
 func (m *Modelx[R]) Columns() []string {
 	if m.columns != nil {
 		return m.columns
@@ -170,32 +186,41 @@ func (m *Modelx[R]) Columns() []string {
 	return m.columns
 }
 
-// Insert inserts a set of SqlxRow instances and returns sql.Result and error.
-// If len(m.Data())>1 the data is inserted in a transaction. If
-// len(m.Data())=0, it panics. If [QueryTemplates][`INSERT`] is not found, it
-// panics.
+/*
+Insert inserts a set of SqlxRow instances (without their ID values) and returns
+sql.Result and error. The value for the ID column is left to be set by the
+database. If len(m.Data())>1 the data is inserted in a transaction. If
+len(m.Data())=0, it panics. If [QueryTemplates][`INSERT`] is not found, it
+panics.
+If you need to insert an SqlxRow structure with a specific value for ID, use
+[SqlxRow.Insert](TODO).
+*/
 func (m *Modelx[R]) Insert() (sql.Result, error) {
 	dataLen := len(m.Data())
 	// Logger.Debugf("Data: %#v", m.data)
 	if dataLen == 0 {
-		panic("Cannot insert when no data is provided!")
+		Logger.Panic("Cannot insert, when no data is provided!")
 	}
 	template := getQueryTemplate(`INSERT`)
-	placeholders := strings.Join(m.Columns(), ",:") // :id,:login_name,:changed_by...
+	colsNoID := m.colsWithoutID()
+	placeholders := strings.Join(colsNoID, ",:") // :login_name,:changed_by...
 	placeholders = sprintf("(:%s)", placeholders)
 	stash := map[string]any{
-		`columns`:      strings.Join(m.Columns(), ","),
+		`columns`:      strings.Join(colsNoID, ","),
 		`table`:        m.Table(),
 		`placeholders`: placeholders,
 	}
 	query := fasttemplate.ExecuteStringStd(template, "${", "}", stash)
-	// Logger.Debugf("INSERT query from fasttemplate: %s", query)
+	Logger.Debugf("INSERT query from fasttemplate: %s", query)
 	if dataLen > 1 {
-		tx := DB().MustBegin()
 		var (
-			r sql.Result
-			e error
+			tx *sqlx.Tx
+			r  sql.Result
+			e  error
 		)
+		if tx, e = DB().Beginx(); e != nil {
+			return nil, e
+		}
 		for _, row := range m.Data() {
 			r, e := tx.NamedExec(query, row)
 			if e != nil {
@@ -211,22 +236,38 @@ func (m *Modelx[R]) Insert() (sql.Result, error) {
 	return DB().NamedExec(query, m.Data()[0])
 }
 
+// colsWithoutID retrurns a new slice, which does not contain the 'id' element.
+func (m *Modelx[R]) colsWithoutID() []string {
+	cols := m.Columns()
+	placeholdersForInsert := make([]string, 0, len(cols)-1)
+	for _, v := range cols {
+		if v == "id" {
+			continue
+		}
+		placeholdersForInsert = append(placeholdersForInsert, v)
+	}
+	return placeholdersForInsert
+}
+
 func getQueryTemplate(key string) string {
 	var (
 		template string
 		ok       bool
 	)
 	if template, ok = QueryTemplates[key].(string); !ok {
-		panic("Query template for `INSERT` was not found in modelx.QueryTemplates!")
+		Logger.Panic("Query template for `INSERT` was not found in modelx.QueryTemplates!")
 	}
 	return template
 }
 
-// Select prepares and executes a [sqlx.NamedQuery]
-func (m *Modelx[R]) Select(where string, bindData any, limitAndOffcet [2]int) error {
+/*
+Select prepares and executes a [sqlx.NamedQuery]. Selected records can be used
+with [SqlxModel.Data].
+*/
+func (m *Modelx[R]) Select(where string, bindData any, limitAndOffset [2]int) error {
 	template := getQueryTemplate(`SELECT`)
-	if limitAndOffcet[0] == 0 {
-		limitAndOffcet[0] = DefaultLimit
+	if limitAndOffset[0] == 0 {
+		limitAndOffset[0] = DefaultLimit
 	}
 	if bindData == nil {
 		bindData = map[string]any{}
@@ -235,15 +276,49 @@ func (m *Modelx[R]) Select(where string, bindData any, limitAndOffcet [2]int) er
 		`columns`: strings.Join(m.Columns(), ","),
 		`table`:   m.Table(),
 		`WHERE`:   where,
-		`limit`:   strconv.Itoa(limitAndOffcet[0]),
-		`offset`:  strconv.Itoa(limitAndOffcet[1]),
+		`limit`:   strconv.Itoa(limitAndOffset[0]),
+		`offset`:  strconv.Itoa(limitAndOffset[1]),
 	}
 	query := fasttemplate.ExecuteStringStd(template, "${", "}", stash)
 	Logger.Debugf("Constructed query : %s", query)
 	if stmt, err := DB().PrepareNamed(query); err != nil {
 		return fmt.Errorf("error from DB().PrepareNamed(SQL): %w", err)
 	} else if err = stmt.Select(&m.data, bindData); err != nil {
-		return fmt.Errorf("error from stmt.Select(...): %w", err)
+		return fmt.Errorf("error from stmt.Select(&m.data, bindData): %w", err)
 	}
 	return nil
+}
+
+/*
+Update constructs a Named UPDATE query and executes it. setData contains data
+to be set. bindData contains data for the WHERE clause. You have to make
+different names for the same fields to be set and used in WHERE clause, because
+these are merged together and passed to sqlx as one map. If there are keys with
+the same name, entries from setData will overwrite those in bindData. This will
+lead to wrongly updated data in the database.
+*/
+func (m *Modelx[R]) Update(setData map[string]any, where string, bindData map[string]any) (sql.Result, error) {
+
+	template := getQueryTemplate(`UPDATE`)
+	stash := map[string]any{
+		`table`: m.Table(),
+		`SET`:   buildSET(setData),
+		`WHERE`: where,
+	}
+	maps.Copy(bindData, setData)
+	query := fasttemplate.ExecuteStringStd(template, "${", "}", stash)
+	Logger.Debugf("Constructed query : %s", query)
+	return DB().NamedExec(query, bindData)
+}
+
+func buildSET(bindData map[string]any) string {
+	var set strings.Builder
+	set.WriteString(`SET`)
+	for key := range bindData {
+		set.WriteString(sprintf(` %s = :%[1]s,`, key))
+	}
+	// s[:len(s)-1]
+	// return strings.TrimRight(set.String(), `,`)
+	setStr := set.String()
+	return setStr[:len(setStr)-1]
 }

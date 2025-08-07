@@ -16,9 +16,10 @@ type SQLMap map[string]any
 // [fasttemplate.ExecuteStringStd] to construct ready for use by [sqlx]
 // queries.
 var QueryTemplates = SQLMap{
-	"INSERT":  `INSERT INTO ${table} (${columns}) VALUES ${placeholders}`,
-	"GetByID": `SELECT * FROM ${table} WHERE id=?`,
-	"SELECT":  `SELECT ${columns} FROM ${table} ${WHERE} LIMIT ${limit} OFFSET ${offset}`,
+	`INSERT`:  `INSERT INTO ${table} (${columns}) VALUES ${placeholders}`,
+	`GetByID`: `SELECT * FROM ${table} WHERE id=?`,
+	`SELECT`:  `SELECT ${columns} FROM ${table} ${WHERE} LIMIT ${limit} OFFSET ${offset}`,
+	`UPDATE`:  `UPDATE ${table} ${SET} ${WHERE}`,
 }
 
 /*

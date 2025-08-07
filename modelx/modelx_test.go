@@ -27,9 +27,9 @@ PRAGMA foreign_keys = ON;
 
 `
 var users = []Users{
-	Users{ID: 1, LoginName: "first", ChangedBy: sql.NullInt32{1, true}},
-	Users{ID: 2, LoginName: "the_second", ChangedBy: sql.NullInt32{1, true}},
-	Users{ID: 3, LoginName: "the_third", ChangedBy: sql.NullInt32{1, true}},
+	Users{LoginName: "first", ChangedBy: sql.NullInt32{1, true}},
+	Users{LoginName: "the_second", ChangedBy: sql.NullInt32{1, true}},
+	Users{LoginName: "the_third", ChangedBy: sql.NullInt32{1, true}},
 }
 
 // Stollen from sqlx_test.go
@@ -101,7 +101,11 @@ func TestColumnsNoData(t *testing.T) {
 
 func TestSingleInsert(t *testing.T) {
 	m := modelx.NewModel[Users](users[0])
-	r, _ := m.Insert()
+	r, e := m.Insert()
+	if e != nil {
+		t.Errorf("Got error from m.Insert(): %v", e)
+		return
+	}
 	if id, e := r.LastInsertId(); e != nil {
 		t.Errorf("Error: %v", e)
 	} else {
@@ -127,12 +131,87 @@ func TestMultyInsert(t *testing.T) {
 	t.Logf("sql.Result:%#v; Error:%#v;", r, e)
 }
 
-func TestSimplestSelect(t *testing.T) {
-
+func TestSelect(t *testing.T) {
 	m := modelx.NewModel[Users]()
-	err := m.Select("", nil, [2]int{0, 0})
-	if err != nil {
-		t.Errorf("Error: %#v", err)
+	tests := []struct {
+		name, where string
+		bindData    map[string]any
+		lAndOff     [2]int
+		lastId      int32
+	}{
+		{
+			// Does a SELECT with default LIMIT and OFFSET, without any WHERE clauses.
+			name:     `All`,
+			where:    ``,
+			bindData: nil,
+			lastId:   3,
+		},
+		{
+			// Does a SELECT with LIMIT 2
+			name:     `WithLimit`,
+			where:    ``,
+			bindData: nil,
+			lAndOff:  [...]int{2, 0},
+			lastId:   2,
+		},
+		{
+			// Does a SELECT with LIMIT 2 and OFFSET 1
+			name:     `WithLimitAndOffset`,
+			where:    ``,
+			bindData: nil,
+			lAndOff:  [...]int{2, 1},
+			lastId:   3,
+		},
+		{
+			// Does a SELECT with WHERE id<:id
+			name:     `WithWhere`,
+			where:    `WHERE id >:id`,
+			bindData: map[string]any{`id`: 1},
+			lastId:   3,
+		},
 	}
-	t.Logf("Returned Data: %#v", m.Data())
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := m.Select(tc.where, tc.bindData, tc.lAndOff)
+			if err != nil {
+				t.Errorf("Error: %#v", err)
+			}
+			dataLen := int32(len(m.Data()))
+			if m.Data()[dataLen-1].ID != tc.lastId {
+				t.Errorf("Expected last.ID to be %d. Got %d", tc.lastId, m.Data()[dataLen-1].ID)
+			}
+		})
+	}
+}
+
+func TestUpdate(t *testing.T) {
+	m := modelx.NewModel[Users]()
+	tests := []struct {
+		name, where string
+		set         map[string]any
+		bind        map[string]any
+	}{
+		{
+			name:  `One`,
+			set:   map[string]any{`login_name`: `first_updated`},
+			where: `WHERE id=:id`,
+			bind:  map[string]any{`id`: 1},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, e := m.Update(tc.set, tc.where, tc.bind)
+			if e != nil {
+				t.Errorf("Error updating one record: %#v", e)
+				return
+			}
+			m.Select(`WHERE id=1`, nil, [2]int{0, 0})
+			if m.Data()[0].LoginName != tc.set[`login_name`] {
+				t.Errorf(`Expected login_name to be %s, but it is %s!`,
+					tc.set[`login_name`], m.Data()[0].LoginName)
+			}
+			t.Logf("Updated records: %#v", m.Data())
+		})
+	}
 }
