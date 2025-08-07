@@ -19,7 +19,6 @@ import (
 
 	"github.com/jmoiron/sqlx"
 	"github.com/labstack/gommon/log"
-	"github.com/valyala/fasttemplate"
 )
 
 var (
@@ -127,7 +126,7 @@ func modelToTable[R SqlxRow](rows R) string {
 }
 
 // camelToSnakeCase is used to convert structure fields to
-// snake case table columns by sqlx.DB.MapperFunc. See tests for examples.
+// snake case table columns by sqlx.DB.MapperFunc.
 func camelToSnakeCase(text string) string {
 	if utf8.RuneCountInString(text) == 2 {
 		return strings.ToLower(text)
@@ -201,7 +200,6 @@ func (m *Modelx[R]) Insert() (sql.Result, error) {
 	if dataLen == 0 {
 		Logger.Panic("Cannot insert, when no data is provided!")
 	}
-	template := getQueryTemplate(`INSERT`)
 	colsNoID := m.colsWithoutID()
 	placeholders := strings.Join(colsNoID, ",:") // :login_name,:changed_by...
 	placeholders = sprintf("(:%s)", placeholders)
@@ -210,7 +208,7 @@ func (m *Modelx[R]) Insert() (sql.Result, error) {
 		`table`:        m.Table(),
 		`placeholders`: placeholders,
 	}
-	query := fasttemplate.ExecuteStringStd(template, "${", "}", stash)
+	query := RenderSQLFor(`INSERT`, stash)
 	Logger.Debugf("INSERT query from fasttemplate: %s", query)
 	if dataLen > 1 {
 		var (
@@ -249,23 +247,11 @@ func (m *Modelx[R]) colsWithoutID() []string {
 	return placeholdersForInsert
 }
 
-func getQueryTemplate(key string) string {
-	var (
-		template string
-		ok       bool
-	)
-	if template, ok = QueryTemplates[key].(string); !ok {
-		Logger.Panic("Query template for `INSERT` was not found in modelx.QueryTemplates!")
-	}
-	return template
-}
-
 /*
 Select prepares and executes a [sqlx.NamedQuery]. Selected records can be used
 with [SqlxModel.Data].
 */
 func (m *Modelx[R]) Select(where string, bindData any, limitAndOffset [2]int) error {
-	template := getQueryTemplate(`SELECT`)
 	if limitAndOffset[0] == 0 {
 		limitAndOffset[0] = DefaultLimit
 	}
@@ -279,7 +265,7 @@ func (m *Modelx[R]) Select(where string, bindData any, limitAndOffset [2]int) er
 		`limit`:   strconv.Itoa(limitAndOffset[0]),
 		`offset`:  strconv.Itoa(limitAndOffset[1]),
 	}
-	query := fasttemplate.ExecuteStringStd(template, "${", "}", stash)
+	query := RenderSQLFor(`SELECT`, stash)
 	Logger.Debugf("Constructed query : %s", query)
 	if stmt, err := DB().PrepareNamed(query); err != nil {
 		return fmt.Errorf("error from DB().PrepareNamed(SQL): %w", err)
@@ -298,16 +284,17 @@ the same name, entries from setData will overwrite those in bindData. This will
 lead to wrongly updated data in the database.
 */
 func (m *Modelx[R]) Update(setData map[string]any, where string, bindData map[string]any) (sql.Result, error) {
-
-	template := getQueryTemplate(`UPDATE`)
 	stash := map[string]any{
 		`table`: m.Table(),
 		`SET`:   buildSET(setData),
 		`WHERE`: where,
 	}
-	maps.Copy(bindData, setData)
-	query := fasttemplate.ExecuteStringStd(template, "${", "}", stash)
+	if bindData == nil {
+		bindData = make(map[string]any)
+	}
+	query := RenderSQLFor(`UPDATE`, stash)
 	Logger.Debugf("Constructed query : %s", query)
+	maps.Copy(bindData, setData)
 	return DB().NamedExec(query, bindData)
 }
 

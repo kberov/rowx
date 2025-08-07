@@ -190,26 +190,51 @@ func TestUpdate(t *testing.T) {
 		name, where string
 		set         map[string]any
 		bind        map[string]any
+		affected    int64
 	}{
 		{
-			name:  `One`,
-			set:   map[string]any{`login_name`: `first_updated`},
-			where: `WHERE id=:id`,
-			bind:  map[string]any{`id`: 1},
+			name:     `One`,
+			set:      map[string]any{`login_name`: `first_updated`},
+			where:    `WHERE id=:id`,
+			bind:     map[string]any{`id`: 1},
+			affected: 1,
+		},
+		{
+			name:     `ManyNoBind`,
+			set:      map[string]any{`group_id`: 1},
+			where:    `WHERE id IN(SELECT id FROM users WHERE ID>1)`,
+			affected: 2,
 		},
 	}
 
-	for _, tc := range tests {
+	for i, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, e := m.Update(tc.set, tc.where, tc.bind)
+			r, e := m.Update(tc.set, tc.where, tc.bind)
 			if e != nil {
 				t.Errorf("Error updating one record: %#v", e)
 				return
 			}
-			m.Select(`WHERE id=1`, nil, [2]int{0, 0})
-			if m.Data()[0].LoginName != tc.set[`login_name`] {
+			if rows, e := r.RowsAffected(); e != nil {
+				t.Errorf("Error: %v", e)
+			} else if rows != tc.affected {
+				t.Errorf("Expected rows to be affected were %d. Got %d", tc.affected, rows)
+			} else {
+				t.Logf("RowsAffected: %d", rows)
+			}
+
+			m.Select(tc.where, tc.bind, [2]int{0, 0})
+			if i == 0 && m.Data()[0].LoginName != tc.set[`login_name`] {
 				t.Errorf(`Expected login_name to be %s, but it is %s!`,
 					tc.set[`login_name`], m.Data()[0].LoginName)
+			}
+			if i == 1 {
+				for _, v := range m.Data() {
+					group_id := tc.set["group_id"]
+					if group_id != int(v.GroupID.Int32) {
+						t.Errorf("expected group_id to be set to %d! It is: %d",
+							group_id, v.GroupID.Int32)
+					}
+				}
 			}
 			t.Logf("Updated records: %#v", m.Data())
 		})
