@@ -29,6 +29,7 @@ var (
 
 /*
 SQLFor composes an SQL query for the given key. Returns the composed query.
+
 Deprecated: Use [RenderSQLFor] instead.
 */
 func SQLFor(query, table string) string {
@@ -47,7 +48,6 @@ partial SQL keys from [QueryTemplates] and then the keys from the given stash
 with values. Returns the produced SQL.
 */
 func RenderSQLFor(key string, stash map[string]any) string {
-	// Replace also potential values from QueryTemplates.
 	// TODO: Can we minimize memory realocation for strings here?
 	return replace(replace(QueryTemplates[key].(string), "${", "}", QueryTemplates), "${", "}", stash)
 }

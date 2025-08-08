@@ -1,8 +1,15 @@
 /*
-Package modelx provides two interfaces and an abstract generic data types
-implementing them to work easily with database records and sets of records.
-Underneath github.com/jmoiron/sqlx is used. It is just an object mapper. The
-relations' constraints are left to be managed by the database
+Package modelx provides two interfaces and two generic data types, implementing
+the interfaces to work easily with database records and sets of records.
+Underneath [sqlx] is used. Package modelx is just an object
+mapper. The relations' constraints are left to be managed by the database.
+If you embed (extend) the data types [Modelx] or [Rowx], you get automatically
+the respective implementation and can overwrite methods to customise them for
+your needs.
+
+Caveat: The current implementation naively assumes that the primary key name is
+`ID`. Of course the primary key can be more than one column and with arbitrary
+name. For now just use [sqlx] for such tables.
 */
 package modelx
 
@@ -28,7 +35,8 @@ var (
 	DefaultLimit = 100
 	// DSN must be set before using DB() function.
 	DSN string
-	// Logger must be instantiated before using any function from this package.
+	// Logger is instantiated (if not instantiated already externally) during
+	// first call of DB() and the log level is set to log.DEBUG.
 	Logger *log.Logger
 	// singleDB is a singleton connection to the database.
 	singleDB *sqlx.DB
@@ -98,8 +106,8 @@ type Modelx[R SqlxRow] struct {
 	columns []string
 }
 
-// NewModel returns a new instance of a table model with optional slice of
-// provided data rows as a variadic parameter.
+// NewModel returns a new instance of a table model with optionally provided
+// data rows as a variadic parameter.
 func NewModel[R SqlxRow](rows ...R) SqlxModel[R] {
 	if rows != nil {
 		return &Modelx[R]{data: rows}
@@ -168,9 +176,9 @@ func (m *Modelx[R]) Data() []R {
 }
 
 /*
-Columns returns a slice with the names of the columns of the table in no
-particular order. Because the order is different each time, we must use
-internally NamedQuery, NamedExec, PrepareNamed etc. from sqlx.
+Columns returns a slice with the names of the table's columns in no particular
+order. Because the order may be different on each instantation of [Modelx], we
+use internally [sqlx.NamedExec], [sqlx.DB.PrepareNamed] etc.
 */
 func (m *Modelx[R]) Columns() []string {
 	if m.columns != nil {
@@ -194,7 +202,7 @@ database. If len(m.Data())>1 the data is inserted in a transaction. If
 len(m.Data())=0, it panics. If [QueryTemplates][`INSERT`] is not found, it
 panics.
 If you need to insert an SqlxRow structure with a specific value for ID, use
-[SqlxRow.Insert](TODO).
+directly some of the [sqlx] functionnalities.
 */
 func (m *Modelx[R]) Insert() (sql.Result, error) {
 	dataLen := len(m.Data())
@@ -250,8 +258,8 @@ func (m *Modelx[R]) colsWithoutID() []string {
 }
 
 /*
-Select prepares and executes a [sqlx.NamedQuery]. Selected records can be used
-with [SqlxModel.Data].
+Select prepares and executes a [sqlx.DB.PrepareNamed] and
+[sqlx.NamedStmt.Select]. Selected records can be used with [SqlxModel.Data].
 */
 func (m *Modelx[R]) Select(where string, bindData any, limitAndOffset [2]int) error {
 	if limitAndOffset[0] == 0 {
@@ -281,9 +289,10 @@ func (m *Modelx[R]) Select(where string, bindData any, limitAndOffset [2]int) er
 Update constructs a Named UPDATE query and executes it. setData contains data
 to be set. bindData contains data for the WHERE clause. You have to make
 different names for the same fields to be set and used in WHERE clause, because
-these are merged together and passed to sqlx as one map. If there are keys with
-the same name, entries from setData will overwrite those in bindData. This will
-lead to wrongly updated data in the database.
+the keys are used as placeholders and are merged together, and passed to sqlx
+as one map. If there are keys with the same name, entries from setData will
+overwrite those in bindData. This may/will lead to wrongly updated data in the
+database.
 */
 func (m *Modelx[R]) Update(setData map[string]any, where string, bindData map[string]any) (sql.Result, error) {
 	stash := map[string]any{
@@ -313,7 +322,7 @@ func buildSET(bindData map[string]any) string {
 }
 
 /*
-Delete deletes records.
+Delete deletes records from the database.
 */
 func (m *Modelx[R]) Delete(where string, bindData map[string]any) (sql.Result, error) {
 	stash := map[string]any{
