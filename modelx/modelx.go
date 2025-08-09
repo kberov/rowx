@@ -31,7 +31,7 @@ import (
 var (
 	// DefaultLogHeader is a template for modelx logging
 	DefaultLogHeader = `${prefix}:${time_rfc3339}:${level}:${short_file}:${line}`
-	// Default LIMIT for SQL queries.
+	// DefaultLimit is the default LIMIT for SQL queries.
 	DefaultLimit = 100
 	// DSN must be set before using DB() function.
 	DSN string
@@ -43,6 +43,13 @@ var (
 	sprintf  = fmt.Sprintf
 )
 
+/*
+DB  instantiates the [log.Logger], invokes [sqlx.MustConnect] and sets the
+[sqlx.MapperFunc]. For now we pass to [sqx.MustConnect] harcodded `sqlite3` as
+a driver to use.
+
+TODO: Allow connections to other databases.
+*/
 func DB() *sqlx.DB {
 	if singleDB != nil {
 		return singleDB
@@ -61,10 +68,10 @@ func DB() *sqlx.DB {
 }
 
 /*
-SqlxRow is an interface and generic constraint for one record. TODO? See if we
-need to implement this interface or the Modelx will be enough.
+SqlxRows is an interface and generic constraint for database records. TODO? See
+if we need to implement this interface or the Modelx will be enough.
 */
-type SqlxRow interface {
+type SqlxRows interface {
 	// Insert this prepared record into it's table.
 	// Insert() error - TODO: insert record with specific ID value
 	// Select (Get) one record by ID
@@ -76,17 +83,58 @@ type SqlxRow interface {
 }
 
 /*
-SqlxModel is an interface and generic constraint for working with set of
-datavase records.
+SqlxModel is an interface and generic constraint for working with a set of
+database records. [Modelx] fully implements SqlxModel. You can embed (extend)
+Modelx to get automatically it's implementation and override some of its
+methods.
 */
-type SqlxModel[R SqlxRow] interface {
-	SqlxRow
+type SqlxModel[R SqlxRows] interface {
+	Data() []R
+	SqlxModelInserter[R]
+	SqlxModelSelector[R]
+	SqlxModelUpdater[R]
+	SqlxModelDeleter[R]
+}
+
+/*
+SqlxModelInserter can be implemented to insert records in a table. It is fully
+implemented by [Modelx]. You can embed (extend) Modelx to get automatically
+it's implementation and override some of its methods.
+*/
+type SqlxModelInserter[R SqlxRows] interface {
 	Table() string
 	Columns() []string
-	Data() []R
 	Insert() (sql.Result, error)
-	Select(string, any, [2]int) error
+}
+
+/*
+SqlxModelUpdater can be implemented to update records in a table. It is fully
+implemented by [Modelx]. You can embed (extend) Modelx to get automatically
+it's implementation and override some of its methods.
+*/
+type SqlxModelUpdater[R SqlxRows] interface {
+	Table() string
 	Update(map[string]any, string, map[string]any) (sql.Result, error)
+}
+
+/*
+SqlxModelSelector can be implemented to select records from a table or view. It
+is fully implemented by [Modelx]. You can embed (extend) Modelx to get
+automatically it's implementation and override some of its methods.
+*/
+type SqlxModelSelector[R SqlxRows] interface {
+	Table() string
+	Columns() []string
+	Select(string, any, [2]int) error
+}
+
+/*
+SqlxModelDeleter can be implemented to delete records from a table. It is
+fully implemented by [Modelx]. You can embed (extend) Modelx to get
+automatically it's implementation and override some of its methods.
+*/
+type SqlxModelDeleter[R SqlxRows] interface {
+	Table() string
 	Delete(string, map[string]any) (sql.Result, error)
 }
 
@@ -94,28 +142,32 @@ type SqlxModel[R SqlxRow] interface {
 Modelx implements SqlxModel interface and can be embedded (extended) to
 customise its behaviour for your own needs.
 */
-type Modelx[R SqlxRow] struct {
-	// data is a slice of rows, retrieved from the database or to be inserted,
-	// updated or deleted.
+type Modelx[R SqlxRows] struct {
+	/*
+		'.data' is a slice of rows, retrieved from the database or to be inserted,
+		or updated.
+	*/
 	data []R
-	// table allows to set explicitly the table name for this model. Otherwise
-	// it is guessed and set from the type of the first element of Data slice
-	// upon first use of Table().
+	/*
+		'.table' allows to set explicitly the table name for this model. Otherwise
+		it is guessed and set from the type of the first element of Data slice
+		upon first use of '.Table()'.
+	*/
 	table string
-	// columns of the table
+	// '.columns' of the table are populated upon first use of '.Columns()'.
 	columns []string
 }
 
 // NewModel returns a new instance of a table model with optionally provided
 // data rows as a variadic parameter.
-func NewModel[R SqlxRow](rows ...R) SqlxModel[R] {
+func NewModel[R SqlxRows](rows ...R) SqlxModel[R] {
 	if rows != nil {
 		return &Modelx[R]{data: rows}
 	}
 	return &Modelx[R]{}
 }
 
-// Table returns the guessed table name from the parametrized Data type.
+// Table returns the guessed table name from the Data type parameter.
 func (m *Modelx[R]) Table() string {
 	if m.table != "" {
 		return m.table
@@ -126,7 +178,7 @@ func (m *Modelx[R]) Table() string {
 
 // modelToTable converts struct type name like *model.Users to
 // 'users' and returns it. Panics if unsuccessful.
-func modelToTable[R SqlxRow](rows R) string {
+func modelToTable[R SqlxRows](rows R) string {
 	typestr := sprintf("%T", rows)
 	_, table, ok := strings.Cut(typestr, ".")
 	if ok {
@@ -184,14 +236,15 @@ func (m *Modelx[R]) Columns() []string {
 	if m.columns != nil {
 		return m.columns
 	}
-	colMap := DB().Mapper.FieldMap(reflect.ValueOf(new(R)))
-	m.columns = make([]string, 0, len(colMap)/2)
+	colMap := DB().Mapper.TypeMap(reflect.ValueOf(new(R)).Type()).Names
+	m.columns = make([]string, 0, len(colMap))
 	for k := range colMap {
 		if strings.Contains(k, `.`) {
 			continue
 		}
 		m.columns = append(m.columns, k)
 	}
+	Logger.Debugf(`m.columns: %#v`, m.columns)
 	return m.columns
 }
 
@@ -201,11 +254,12 @@ sql.Result and error. The value for the ID column is left to be set by the
 database. If len(m.Data())>1 the data is inserted in a transaction. If
 len(m.Data())=0, it panics. If [QueryTemplates][`INSERT`] is not found, it
 panics.
+
 If you need to insert an SqlxRow structure with a specific value for ID, use
 directly some of the [sqlx] functionnalities.
 */
 func (m *Modelx[R]) Insert() (sql.Result, error) {
-	dataLen := len(m.Data())
+	dataLen := len(m.data)
 	// Logger.Debugf("Data: %#v", m.data)
 	if dataLen == 0 {
 		Logger.Panic("Cannot insert, when no data is provided!")
@@ -229,7 +283,7 @@ func (m *Modelx[R]) Insert() (sql.Result, error) {
 		if tx, e = DB().Beginx(); e != nil {
 			return nil, e
 		}
-		for _, row := range m.Data() {
+		for _, row := range m.data {
 			r, e := tx.NamedExec(query, row)
 			if e != nil {
 				return r, e
@@ -241,7 +295,7 @@ func (m *Modelx[R]) Insert() (sql.Result, error) {
 		return r, e
 
 	}
-	return DB().NamedExec(query, m.Data()[0])
+	return DB().NamedExec(query, m.data[0])
 }
 
 // colsWithoutID retrurns a new slice, which does not contain the 'id' element.
@@ -277,6 +331,7 @@ func (m *Modelx[R]) Select(where string, bindData any, limitAndOffset [2]int) er
 	}
 	query := RenderSQLFor(`SELECT`, stash)
 	Logger.Debugf("Constructed query : %s", query)
+	m.data = make([]R, 0, limitAndOffset[0])
 	if stmt, err := DB().PrepareNamed(query); err != nil {
 		return fmt.Errorf("error from DB().PrepareNamed(SQL): %w", err)
 	} else if err = stmt.Select(&m.data, bindData); err != nil {

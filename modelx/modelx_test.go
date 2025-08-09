@@ -76,7 +76,8 @@ func TestNewNoData(t *testing.T) {
 }
 
 func TestNewWithData(t *testing.T) {
-	m := modelx.NewModel[Users](users...)
+	// type parameter is guessed from the type of the parameters.
+	m := modelx.NewModel(users...)
 	expected := len(users)
 	if i := len(m.Data()); i != expected {
 		t.Errorf("Expected rows: %d. Got: %d!", expected, i)
@@ -137,14 +138,14 @@ func TestSelect(t *testing.T) {
 		name, where string
 		bindData    map[string]any
 		lAndOff     [2]int
-		lastId      int32
+		lastID      int32
 	}{
 		{
 			// Does a SELECT with default LIMIT and OFFSET, without any WHERE clauses.
 			name:     `All`,
 			where:    ``,
 			bindData: nil,
-			lastId:   3,
+			lastID:   3,
 		},
 		{
 			// Does a SELECT with LIMIT 2
@@ -152,7 +153,7 @@ func TestSelect(t *testing.T) {
 			where:    ``,
 			bindData: nil,
 			lAndOff:  [...]int{2, 0},
-			lastId:   2,
+			lastID:   2,
 		},
 		{
 			// Does a SELECT with LIMIT 2 and OFFSET 1
@@ -160,14 +161,14 @@ func TestSelect(t *testing.T) {
 			where:    ``,
 			bindData: nil,
 			lAndOff:  [...]int{2, 1},
-			lastId:   3,
+			lastID:   3,
 		},
 		{
 			// Does a SELECT with WHERE id<:id
 			name:     `WithWhere`,
 			where:    `WHERE id >:id`,
 			bindData: map[string]any{`id`: 1},
-			lastId:   3,
+			lastID:   3,
 		},
 	}
 	for _, tc := range tests {
@@ -177,8 +178,8 @@ func TestSelect(t *testing.T) {
 				t.Errorf("Error: %#v", err)
 			}
 			dataLen := int32(len(m.Data()))
-			if m.Data()[dataLen-1].ID != tc.lastId {
-				t.Errorf("Expected last.ID to be %d. Got %d", tc.lastId, m.Data()[dataLen-1].ID)
+			if m.Data()[dataLen-1].ID != tc.lastID {
+				t.Errorf("Expected last.ID to be %d. Got %d", tc.lastID, m.Data()[dataLen-1].ID)
 			}
 		})
 	}
@@ -229,10 +230,10 @@ func TestUpdate(t *testing.T) {
 			}
 			if i == 1 {
 				for _, v := range m.Data() {
-					group_id := tc.set["group_id"]
-					if group_id != int(v.GroupID.Int32) {
-						t.Errorf("expected group_id to be set to %d! It is: %d",
-							group_id, v.GroupID.Int32)
+					groupID := tc.set["group_id"]
+					if groupID != int(v.GroupID.Int32) {
+						t.Errorf("Expected group_id to be set to %d! It was set to: %d",
+							groupID, v.GroupID.Int32)
 					}
 				}
 			}
