@@ -3,7 +3,6 @@ package modelx_test
 import (
 	"database/sql"
 	"fmt"
-	"maps"
 	"strings"
 	"testing"
 
@@ -23,14 +22,32 @@ CREATE TABLE groups (
 id INTEGER PRIMARY KEY AUTOINCREMENT,
 name VARCHAR(100) UNIQUE NOT NULL,
 changed_by INTEGER DEFAULT NULL REFERENCES users(id) ON DELETE SET DEFAULT);
+INSERT INTO groups(id,name, changed_by) VALUES (0,'superadmin',1);
 INSERT INTO groups(id,name, changed_by) VALUES (1,'admins',1);
+INSERT INTO groups(id,name, changed_by) VALUES (2,'editors',1);
+INSERT INTO groups(id,name, changed_by) VALUES (3,'guests',1);
+INSERT INTO groups(id,name, changed_by) VALUES (4,'commenters',1);
 PRAGMA foreign_keys = ON;
 
 `
+
+type Users struct {
+	ID        int32
+	LoginName string
+	GroupID   sql.NullInt32
+	ChangedBy sql.NullInt32
+}
+
 var users = []Users{
 	Users{LoginName: "first", ChangedBy: sql.NullInt32{1, true}},
 	Users{LoginName: "the_second", ChangedBy: sql.NullInt32{1, true}},
 	Users{LoginName: "the_third", ChangedBy: sql.NullInt32{1, true}},
+}
+
+type Groups struct {
+	ID        int32
+	Name      string
+	ChangedBy sql.NullInt32
 }
 
 // Stollen from sqlx_test.go
@@ -45,13 +62,6 @@ func multiExec(e sqlx.Execer, query string) {
 			fmt.Println(err, s)
 		}
 	}
-}
-
-type Users struct {
-	ID        int32
-	LoginName string
-	GroupID   sql.NullInt32
-	ChangedBy sql.NullInt32
 }
 
 func init() {
@@ -136,10 +146,12 @@ func TestMultyInsert(t *testing.T) {
 func TestSelect(t *testing.T) {
 	m := modelx.NewModel[Users]()
 	tests := []struct {
-		name, where string
-		bindData    map[string]any
-		lAndOff     []int
-		lastID      int32
+		name, where   string
+		bindData      map[string]any
+		lAndOff       []int
+		lastID        int32
+		expectedError bool
+		errContains   string
 	}{
 		{
 			// Does a SELECT with default LIMIT and OFFSET, without any WHERE clauses.
@@ -171,12 +183,31 @@ func TestSelect(t *testing.T) {
 			bindData: map[string]any{`id`: 1},
 			lastID:   3,
 		},
+		{
+			name:          `PrepareError`,
+			where:         `WHERE `,
+			bindData:      map[string]any{`id`: 1},
+			lastID:        3,
+			expectedError: true,
+			errContains:   `syntax error`,
+		},
+		{
+			name:          `SelectError`,
+			where:         `WHERE id=:id`,
+			bindData:      map[string]any{},
+			lastID:        3,
+			expectedError: true,
+			errContains:   `could not find name id`,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			rows, err := m.Select(tc.where, tc.bindData, tc.lAndOff...)
-			if err != nil {
+			if err != nil && !tc.expectedError {
 				t.Errorf("Error: %#v", err)
+			} else if tc.expectedError && strings.Contains(err.Error(), tc.errContains) {
+				t.Logf("Expected error: %#v", err)
+				return
 			}
 			dataLen := int32(len(rows))
 			if rows[dataLen-1].ID != tc.lastID {
@@ -187,38 +218,36 @@ func TestSelect(t *testing.T) {
 }
 
 func TestUpdate(t *testing.T) {
-	m := modelx.NewModel[Users]()
 	tests := []struct {
-		name, where string
-		set         map[string]any
-		bind        map[string]any
-		affected    int64
-		structSet   any
-		sctructBind any
+		name, where           string
+		Modelx                modelx.SqlxModel[Users]
+		affected              int64
+		excludeColumnsInWhere bool
+		selectBind            map[string]any
+		dbError               bool
 	}{
 		{
-			name:     `One`,
-			set:      map[string]any{`login_name`: `first_updated`},
-			where:    `WHERE id=:id`,
-			bind:     map[string]any{`id`: 1},
-			affected: 1,
+			name:  `OneExcludeID`,
+			where: `WHERE id=:id`,
+			Modelx: modelx.NewModel(Users{LoginName: `first_updated`, ID: 1,
+				GroupID: sql.NullInt32{Valid: true, Int32: 0}}),
+			affected:              1,
+			excludeColumnsInWhere: true,
+			selectBind:            map[string]any{`id`: 1},
+			dbError:               false,
 		},
 		{
-			name:     `ManyNoBind`,
-			set:      map[string]any{`group_id`: 1},
-			where:    `WHERE id IN(SELECT id FROM users WHERE ID>1)`,
-			affected: 2,
+			name: `Many`,
+			// this WHERE clause will produce UNIQUE CONSTRAINT Error
+			where: `WHERE id IN(SELECT id FROM users WHERE ID>1)`,
+			Modelx: modelx.NewModel(
+				Users{LoginName: `second_updated`, ID: 2},
+				Users{LoginName: `third_updated`, ID: 3, GroupID: sql.NullInt32{Valid: true, Int32: 2}},
+			),
+			affected:              2,
+			excludeColumnsInWhere: true,
+			dbError:               true,
 		},
-		//		{
-		//			name:     `StructSet`,
-		//			where:    `WHERE id=:id`,
-		//			bind:     map[string]any{`id`: 1},
-		//			affected: 1,
-		//			structSet: struct {
-		//				ID        int32
-		//				LoginName string
-		//			}{LoginName: `struct_updated`, ID: 1},
-		//		},
 	}
 
 	for i, tc := range tests {
@@ -227,16 +256,16 @@ func TestUpdate(t *testing.T) {
 				r sql.Result
 				e error
 			)
-			if tc.structSet == nil {
-				maps.Copy(tc.set, tc.bind)
-				r, e = m.Update(modelx.SQLForSET(tc.set), tc.where, tc.set)
-			} else {
-				r, e = m.Update(modelx.SQLForSET(tc.structSet), tc.where, tc.structSet)
-			}
-			if e != nil {
-				t.Errorf("Error updating one record: %#v", e)
+
+			r, e = tc.Modelx.Update(tc.where, tc.excludeColumnsInWhere)
+			if e != nil && tc.dbError {
+				t.Logf("Error updating records: '%#v' was expected.", e)
+				return
+			} else if e != nil && !tc.dbError {
+				t.Errorf("Unexpected error: '%#v'!...", e)
 				return
 			}
+			t.Logf("r: %#v", r)
 			if rows, e := r.RowsAffected(); e != nil {
 				t.Errorf("Error: %v", e)
 			} else if rows != tc.affected {
@@ -245,30 +274,34 @@ func TestUpdate(t *testing.T) {
 				t.Logf("RowsAffected: %d", rows)
 			}
 
-			m.Select(tc.where, tc.bintd)
-			if i == 0 && m.Data()[0].LoginName != tc.set[`login_name`] {
-				t.Errorf(`Expected login_name to be %s, but it is %s!`,
-					tc.set[`login_name`], m.Data()[0].LoginName)
+			data, e := modelx.NewModel[Users]().Select(tc.where, tc.selectBind)
+			if e != nil {
+				t.Errorf(`Error in m.Select: %#v`, e)
+				return
 			}
-			if i == 1 {
-				for _, v := range m.Data() {
-					groupID := tc.set["group_id"]
-					if groupID != int(v.GroupID.Int32) {
-						t.Errorf("Expected group_id to be set to %d! It was set to: %d",
-							groupID, v.GroupID.Int32)
-					}
+			if i == 0 && data[0].LoginName != tc.Modelx.Data()[0].LoginName {
+				t.Errorf(`Expected login_name to be %s, but it is %s!`,
+					tc.Modelx.Data()[0].LoginName, data[0].LoginName)
+			}
+
+			if i == 0 {
+				groupID := tc.Modelx.Data()[0].GroupID
+				if groupID != data[0].GroupID {
+					t.Errorf("Expected group_id to be set to %#v! It was set to: %#v",
+						groupID, data[0].GroupID)
 				}
 			}
-			t.Logf("Updated records: %#v", m.Data())
+			t.Logf("Updated records: %#v", data)
 		})
 	}
 }
 
 func TestDelete(t *testing.T) {
 	m := modelx.NewModel[Users]()
+	// TODO: add test case for bind where bind is a struct.
 	tests := []struct {
 		name, where string
-		bind        map[string]any
+		bind        any
 		affected    int64
 	}{
 		{
@@ -299,4 +332,71 @@ func TestDelete(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEmbed(t *testing.T) {
+	type myModel[R modelx.SqlxRows] struct {
+		modelx.Modelx[R]
+	}
+	// ---
+	mm := &myModel[Groups]{}
+	if mm.Table() != `groups` {
+		t.Errorf(`Wrong table for myModel: %s`, mm.Table())
+	}
+	mm = new(myModel[Groups])
+	if mm.Table() != `groups` {
+		t.Errorf(`Wrong table for myModel: %s`, mm.Table())
+		return
+	}
+	data, err := mm.Select(`WHERE id >:id`, modelx.SQLMap{`id`: 1})
+	if err != nil {
+		t.Errorf(`Unexpected error:%#v`, err)
+	}
+	if len(data) != 3 {
+		t.Errorf(`Expected 3 rows from the database but got %d.`, len(data))
+	}
+}
+
+func TestPanics(t *testing.T) {
+	tests := []struct {
+		name string
+		fn   func()
+	}{
+		{
+			name: `InsertNoData`,
+			fn: func() {
+				g := modelx.NewModel[Groups]()
+				g.Insert()
+			},
+		},
+		{
+			name: `NoTable`,
+			fn: func() {
+				modelx.NewModel[struct{ ID int16 }]().Table()
+			},
+		},
+		{
+			name: `RenderSQLTemplate NoTemplateFound`,
+			fn: func() {
+				modelx.RenderSQLTemplate(`NOSUCH`, map[string]any{})
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			expectPanic(t, tc.fn)
+		})
+	}
+
+}
+
+func expectPanic(t *testing.T, f func()) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("MISSING PANIC")
+		} else {
+			t.Log(r)
+		}
+	}()
+	f()
 }

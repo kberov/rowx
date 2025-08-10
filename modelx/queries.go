@@ -12,10 +12,11 @@ type SQLMap map[string]any
 
 var (
 	/*
-		QueryTemplates is an SQLMap (~map[string]any), containing templates from which
-		the queries are built. Some of the values are parts of other queries and may be
-		used for replacement in other entries, used as templates. We use
-		[fasttemplate.ExecuteStringStd] to construct ready for use by [sqlx] queries.
+		QueryTemplates is an SQLMap (~map[string]any), containing templates
+		from which the queries are built. Some of the values may be parts of
+		other templates and may be used for replacement in other entries, used
+		as templates. We use [fasttemplate.ExecuteStringStd] to construct ready
+		for use by [sqlx] queries.
 	*/
 	QueryTemplates = SQLMap{
 		`GetByID`: `SELECT * FROM ${table} WHERE id=:id`,
@@ -28,24 +29,9 @@ var (
 )
 
 /*
-SQLFor composes an SQL query for the given key. Returns the composed query.
-
-Deprecated: Use [RenderSQLTemplate] instead.
-*/
-func SQLFor(query, table string) string {
-	q := QueryTemplates[query].(string)
-	QueryTemplates["table"] = table
-	for strings.Contains(q, "${") {
-		q = fasttemplate.ExecuteStringStd(q, "${", "}", QueryTemplates)
-	}
-	delete(QueryTemplates, "table")
-	return q
-}
-
-/*
 RenderSQLTemplate gets the template from [QueryTemplates], replaces potential
 partial SQL keys from [QueryTemplates] and then the keys from the given stash
-with values. Returns the produced SQL.
+with values. Returns the produced SQL. Panics if key not found or not of the expected type (string).
 */
 func RenderSQLTemplate(key string, stash map[string]any) string {
 	// TODO: Can we minimize memory realocation for strings here?
@@ -53,23 +39,23 @@ func RenderSQLTemplate(key string, stash map[string]any) string {
 }
 
 /*
-SQLForSET produces the `SET column=:column_value,...` for an UPDATE query.
+SQLForSET produces the `SET column=:column_value,...` for an UPDATE query from
+a list of columns, probably produced by [Modelx.Columns]. Names mentioned in
+WHERE are excluded if `exclude` is set to true. The function is exported for
+constructing SQL in custom cases.
 */
-func SQLForSET(setData any) string {
+func SQLForSET(columns []string, where string, exclude bool) string {
 	var set strings.Builder
 	set.WriteString(`SET`)
-	switch t := setData.(type) {
-	case map[string]any:
-		for key := range t {
-			set.WriteString(sprintf(` %s = :%[1]s,`, key))
+	for _, v := range columns {
+		if exclude && strings.Contains(where, `:`+v) {
+			continue
 		}
-		// s[:len(s)-1]
-		// return strings.TrimRight(set.String(), `,`)
-		setStr := set.String()
-		return setStr[:len(setStr)-1]
-
-	default:
-		Logger.Panicf(`%T is Not supported for setData!`, setData)
+		set.WriteString(sprintf(` %s = :%[1]s,`, v))
 	}
-	return ""
+	setStr := set.String()
+	Logger.Debugf(`SQL from SQLForSET:'%s'`, setStr)
+	// s[:len(s)-1] == return strings.TrimRight(set.String(), `,`)
+	return setStr[:len(setStr)-1]
+
 }

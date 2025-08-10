@@ -1,9 +1,9 @@
 /*
-Package modelx provides two interfaces and two generic data types, implementing
+Package modelx provides interfaces and a generic data type, implementing
 the interfaces to work easily with database records and sets of records.
-Underneath [sqlx] is used. Package modelx is just an object
+Underneath [sqlx] is used. Package modelx provides just an object
 mapper. The relations' constraints are left to be managed by the database.
-If you embed (extend) the data types [Modelx] or [Rowx], you get automatically
+If you embed (extend) the data type [Modelx], you get automatically
 the respective implementation and can overwrite methods to customise them for
 your needs.
 
@@ -32,6 +32,8 @@ var (
 	DefaultLogHeader = `${prefix}:${time_rfc3339}:${level}:${short_file}:${line}`
 	// DefaultLimit is the default LIMIT for SQL queries.
 	DefaultLimit = 100
+	// DriverName is the name of the database engine to use.
+	DriverName = `sqlite3`
 	// DSN must be set before using DB() function.
 	DSN string
 	// Logger is instantiated (if not instantiated already externally) during
@@ -44,10 +46,7 @@ var (
 
 /*
 DB  instantiates the [log.Logger], invokes [sqlx.MustConnect] and sets the
-[sqlx.MapperFunc]. For now we pass to [sqx.MustConnect] harcodded `sqlite3` as
-a driver to use.
-
-TODO: Allow connections to other databases.
+[sqlx.MapperFunc].
 */
 func DB() *sqlx.DB {
 	if singleDB != nil {
@@ -61,7 +60,7 @@ func DB() *sqlx.DB {
 	}
 	Logger.Debugf("Connecting to database '%s'...", DSN)
 
-	singleDB = sqlx.MustConnect("sqlite3", DSN)
+	singleDB = sqlx.MustConnect(DriverName, DSN)
 	singleDB.MapperFunc(camelToSnakeCase)
 	return singleDB
 }
@@ -113,7 +112,7 @@ its implementation and override some of its methods.
 */
 type SqlxModelUpdater[R SqlxRows] interface {
 	Table() string
-	Update(string, string, any) (sql.Result, error)
+	Update(string, bool) (sql.Result, error)
 }
 
 /*
@@ -134,7 +133,7 @@ automatically it's implementation and override some of its methods.
 */
 type SqlxModelDeleter[R SqlxRows] interface {
 	Table() string
-	Delete(string, map[string]any) (sql.Result, error)
+	Delete(string, any) (sql.Result, error)
 }
 
 /*
@@ -180,10 +179,10 @@ func (m *Modelx[R]) Table() string {
 func modelToTable[R SqlxRows](rows R) string {
 	typestr := sprintf("%T", rows)
 	_, table, ok := strings.Cut(typestr, ".")
-	if ok {
-		return camelToSnakeCase(table)
+	if !ok {
+		Logger.Panicf("Could not derive table name from type '%s'!", typestr)
 	}
-	panic(sprintf("Could not derive table name from type '%s'!", typestr))
+	return camelToSnakeCase(table)
 }
 
 // camelToSnakeCase is used to convert structure fields to
@@ -249,7 +248,7 @@ func (m *Modelx[R]) Columns() []string {
 
 /*
 Insert inserts a set of SqlxRows instances (without their ID values) and returns
-sql.Result and error. The value for the ID column is left to be set by the
+[sql.Result] and [error]. The value for the ID column is left to be set by the
 database. If the records to be inserted are more than one, the data is inserted
 in a transaction. If there are no records to be inserted, it panics. If
 [QueryTemplates][`INSERT`] is not found, it panics.
@@ -282,14 +281,16 @@ func (m *Modelx[R]) Insert() (sql.Result, error) {
 		if tx, e = DB().Beginx(); e != nil {
 			return nil, e
 		}
+		// The rollback will be ignored if the tx has been committed already.
+		defer func() { _ = tx.Rollback() }()
 		for _, row := range m.data {
-			r, e := tx.NamedExec(query, row)
+			r, e = tx.NamedExec(query, row)
 			if e != nil {
 				return r, e
 			}
 		}
 		if e := tx.Commit(); e != nil {
-			return nil, e
+			return r, e
 		}
 		return r, e
 
@@ -302,6 +303,8 @@ func (m *Modelx[R]) colsWithoutID() []string {
 	cols := m.Columns()
 	placeholdersForInsert := make([]string, 0, len(cols)-1)
 	for _, v := range cols {
+		//FIXME: implement PrimaryKey() method, returning a list of column names used
+		//together as a primary key constraint.
 		if v == "id" {
 			continue
 		}
@@ -346,35 +349,64 @@ func (m *Modelx[R]) Select(where string, bindData any, limitAndOffset ...int) ([
 }
 
 /*
-Update constructs a Named UPDATE query and executes it. setData contains data
-to be set. bindData contains data for the WHERE clause. You have to make
-different names for the same fields to be set and used in WHERE clause, because
-the keys are used as placeholders and are merged together, and passed to sqlx
-as one map. If there are keys with the same name, entries from setData will
-overwrite those in bindData. This may/will lead to wrongly updated data in the
-database.
+Update constructs a Named UPDATE query and executes it. We assume that the bind
+data parameter for [sqlx.DB.NamedExec] is each element of the slice of passed
+SqlxRows to [NewModelx].
+
+If exclude is set to true, the parameter `where` is scanned for field names to
+exclude fields, used as search criteria in the WHERE clause. The fields, not
+used in WHERE clause, are used for the SET clause. The operation is always
+performed in a transaction.
+
+For any case in which this method is not suitable, use directly sqlx.
 */
-func (m *Modelx[R]) Update(setSQL string, where string, bindData any) (sql.Result, error) {
+func (m *Modelx[R]) Update(where string, exclude bool) (sql.Result, error) {
+	var (
+		tx *sqlx.Tx
+		r  sql.Result
+		e  error
+	)
+	if tx, e = DB().Beginx(); e != nil {
+		return nil, e
+	}
+	// The rollback will be ignored if the tx has been committed already.
+	defer func() { _ = tx.Rollback() }()
+
 	stash := map[string]any{
 		`table`: m.Table(),
-		`SET`:   setSQL,
+		// Do not update ID in any case.
+		`SET`:   SQLForSET(m.Columns(), where, exclude),
 		`WHERE`: where,
-	}
-	if bindData == nil {
-		bindData = map[string]any{}
 	}
 	query := RenderSQLTemplate(`UPDATE`, stash)
 	Logger.Debugf("Constructed query : %s", query)
-	return DB().NamedExec(query, bindData)
+	stmt, e := tx.PrepareNamed(query)
+	if e != nil {
+		return nil, e
+	}
+	for _, row := range m.data {
+		r, e = stmt.Exec(row)
+		if e != nil {
+			return r, e
+		}
+	}
+
+	if e := tx.Commit(); e != nil {
+		return nil, e
+	}
+	return r, e
 }
 
 /*
 Delete deletes records from the database.
 */
-func (m *Modelx[R]) Delete(where string, bindData map[string]any) (sql.Result, error) {
+func (m *Modelx[R]) Delete(where string, bindData any) (sql.Result, error) {
 	stash := map[string]any{
 		`table`: m.Table(),
 		`WHERE`: where,
+	}
+	if bindData == nil {
+		bindData = map[string]any{}
 	}
 	query := RenderSQLTemplate(`DELETE`, stash)
 	Logger.Debugf("Constructed query : %s", query)
