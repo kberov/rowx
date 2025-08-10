@@ -16,7 +16,6 @@ package modelx
 import (
 	"database/sql"
 	"fmt"
-	"maps"
 	"os"
 	"reflect"
 	"strconv"
@@ -85,7 +84,7 @@ type SqlxRows interface {
 /*
 SqlxModel is an interface and generic constraint for working with a set of
 database records. [Modelx] fully implements SqlxModel. You can embed (extend)
-Modelx to get automatically it's implementation and override some of its
+Modelx to get automatically its implementation and override some of its
 methods.
 */
 type SqlxModel[R SqlxRows] interface {
@@ -99,7 +98,7 @@ type SqlxModel[R SqlxRows] interface {
 /*
 SqlxModelInserter can be implemented to insert records in a table. It is fully
 implemented by [Modelx]. You can embed (extend) Modelx to get automatically
-it's implementation and override some of its methods.
+its implementation and override some of its methods.
 */
 type SqlxModelInserter[R SqlxRows] interface {
 	Table() string
@@ -110,22 +109,22 @@ type SqlxModelInserter[R SqlxRows] interface {
 /*
 SqlxModelUpdater can be implemented to update records in a table. It is fully
 implemented by [Modelx]. You can embed (extend) Modelx to get automatically
-it's implementation and override some of its methods.
+its implementation and override some of its methods.
 */
 type SqlxModelUpdater[R SqlxRows] interface {
 	Table() string
-	Update(map[string]any, string, map[string]any) (sql.Result, error)
+	Update(string, string, any) (sql.Result, error)
 }
 
 /*
 SqlxModelSelector can be implemented to select records from a table or view. It
 is fully implemented by [Modelx]. You can embed (extend) Modelx to get
-automatically it's implementation and override some of its methods.
+automatically its implementation and override some of its methods.
 */
 type SqlxModelSelector[R SqlxRows] interface {
 	Table() string
 	Columns() []string
-	Select(string, any, [2]int) error
+	Select(string, any, ...int) ([]R, error)
 }
 
 /*
@@ -249,13 +248,13 @@ func (m *Modelx[R]) Columns() []string {
 }
 
 /*
-Insert inserts a set of SqlxRow instances (without their ID values) and returns
+Insert inserts a set of SqlxRows instances (without their ID values) and returns
 sql.Result and error. The value for the ID column is left to be set by the
-database. If len(m.Data())>1 the data is inserted in a transaction. If
-len(m.Data())=0, it panics. If [QueryTemplates][`INSERT`] is not found, it
-panics.
+database. If the records to be inserted are more than one, the data is inserted
+in a transaction. If there are no records to be inserted, it panics. If
+[QueryTemplates][`INSERT`] is not found, it panics.
 
-If you need to insert an SqlxRow structure with a specific value for ID, use
+If you need to insert an SqlxRows structure with a specific value for ID, use
 directly some of the [sqlx] functionnalities.
 */
 func (m *Modelx[R]) Insert() (sql.Result, error) {
@@ -272,7 +271,7 @@ func (m *Modelx[R]) Insert() (sql.Result, error) {
 		`table`:        m.Table(),
 		`placeholders`: placeholders,
 	}
-	query := RenderSQLFor(`INSERT`, stash)
+	query := RenderSQLTemplate(`INSERT`, stash)
 	Logger.Debugf("INSERT query from fasttemplate: %s", query)
 	if dataLen > 1 {
 		var (
@@ -314,13 +313,19 @@ func (m *Modelx[R]) colsWithoutID() []string {
 /*
 Select prepares and executes a [sqlx.DB.PrepareNamed] and
 [sqlx.NamedStmt.Select]. Selected records can be used with [SqlxModel.Data].
+`limitAndOffset` is a variadic variable. If passed, it is expected to consist
+of two values limit and offset - in that order. The default value  for LIMIT
+can be set by [DefaultLimit]. OFFSET is 0 by default.
 */
-func (m *Modelx[R]) Select(where string, bindData any, limitAndOffset [2]int) error {
-	if limitAndOffset[0] == 0 {
-		limitAndOffset[0] = DefaultLimit
+func (m *Modelx[R]) Select(where string, bindData any, limitAndOffset ...int) ([]R, error) {
+	if len(limitAndOffset) == 0 {
+		limitAndOffset = append(limitAndOffset, DefaultLimit)
+	}
+	if len(limitAndOffset) == 1 {
+		limitAndOffset = append(limitAndOffset, 0)
 	}
 	if bindData == nil {
-		bindData = map[string]any{}
+		bindData = struct{}{}
 	}
 	stash := map[string]any{
 		`columns`: strings.Join(m.Columns(), ","),
@@ -329,15 +334,15 @@ func (m *Modelx[R]) Select(where string, bindData any, limitAndOffset [2]int) er
 		`limit`:   strconv.Itoa(limitAndOffset[0]),
 		`offset`:  strconv.Itoa(limitAndOffset[1]),
 	}
-	query := RenderSQLFor(`SELECT`, stash)
+	query := RenderSQLTemplate(`SELECT`, stash)
 	Logger.Debugf("Constructed query : %s", query)
 	m.data = make([]R, 0, limitAndOffset[0])
 	if stmt, err := DB().PrepareNamed(query); err != nil {
-		return fmt.Errorf("error from DB().PrepareNamed(SQL): %w", err)
+		return nil, fmt.Errorf("error from DB().PrepareNamed(SQL): %w", err)
 	} else if err = stmt.Select(&m.data, bindData); err != nil {
-		return fmt.Errorf("error from stmt.Select(&m.data, bindData): %w", err)
+		return nil, fmt.Errorf("error from stmt.Select(&m.data, bindData): %w", err)
 	}
-	return nil
+	return m.data, nil
 }
 
 /*
@@ -349,31 +354,18 @@ as one map. If there are keys with the same name, entries from setData will
 overwrite those in bindData. This may/will lead to wrongly updated data in the
 database.
 */
-func (m *Modelx[R]) Update(setData map[string]any, where string, bindData map[string]any) (sql.Result, error) {
+func (m *Modelx[R]) Update(setSQL string, where string, bindData any) (sql.Result, error) {
 	stash := map[string]any{
 		`table`: m.Table(),
-		`SET`:   buildSET(setData),
+		`SET`:   setSQL,
 		`WHERE`: where,
 	}
 	if bindData == nil {
-		bindData = make(map[string]any)
+		bindData = map[string]any{}
 	}
-	query := RenderSQLFor(`UPDATE`, stash)
+	query := RenderSQLTemplate(`UPDATE`, stash)
 	Logger.Debugf("Constructed query : %s", query)
-	maps.Copy(bindData, setData)
 	return DB().NamedExec(query, bindData)
-}
-
-func buildSET(bindData map[string]any) string {
-	var set strings.Builder
-	set.WriteString(`SET`)
-	for key := range bindData {
-		set.WriteString(sprintf(` %s = :%[1]s,`, key))
-	}
-	// s[:len(s)-1]
-	// return strings.TrimRight(set.String(), `,`)
-	setStr := set.String()
-	return setStr[:len(setStr)-1]
 }
 
 /*
@@ -384,7 +376,7 @@ func (m *Modelx[R]) Delete(where string, bindData map[string]any) (sql.Result, e
 		`table`: m.Table(),
 		`WHERE`: where,
 	}
-	query := RenderSQLFor(`DELETE`, stash)
+	query := RenderSQLTemplate(`DELETE`, stash)
 	Logger.Debugf("Constructed query : %s", query)
 	return DB().NamedExec(query, bindData)
 }

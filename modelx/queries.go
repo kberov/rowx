@@ -30,7 +30,7 @@ var (
 /*
 SQLFor composes an SQL query for the given key. Returns the composed query.
 
-Deprecated: Use [RenderSQLFor] instead.
+Deprecated: Use [RenderSQLTemplate] instead.
 */
 func SQLFor(query, table string) string {
 	q := QueryTemplates[query].(string)
@@ -43,11 +43,33 @@ func SQLFor(query, table string) string {
 }
 
 /*
-RenderSQLFor gets the template from [QueryTemplates], replaces potential
+RenderSQLTemplate gets the template from [QueryTemplates], replaces potential
 partial SQL keys from [QueryTemplates] and then the keys from the given stash
 with values. Returns the produced SQL.
 */
-func RenderSQLFor(key string, stash map[string]any) string {
+func RenderSQLTemplate(key string, stash map[string]any) string {
 	// TODO: Can we minimize memory realocation for strings here?
 	return replace(replace(QueryTemplates[key].(string), "${", "}", QueryTemplates), "${", "}", stash)
+}
+
+/*
+SQLForSET produces the `SET column=:column_value,...` for an UPDATE query.
+*/
+func SQLForSET(setData any) string {
+	var set strings.Builder
+	set.WriteString(`SET`)
+	switch t := setData.(type) {
+	case map[string]any:
+		for key := range t {
+			set.WriteString(sprintf(` %s = :%[1]s,`, key))
+		}
+		// s[:len(s)-1]
+		// return strings.TrimRight(set.String(), `,`)
+		setStr := set.String()
+		return setStr[:len(setStr)-1]
+
+	default:
+		Logger.Panicf(`%T is Not supported for setData!`, setData)
+	}
+	return ""
 }

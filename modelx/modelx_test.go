@@ -3,6 +3,7 @@ package modelx_test
 import (
 	"database/sql"
 	"fmt"
+	"maps"
 	"strings"
 	"testing"
 
@@ -127,7 +128,7 @@ func TestSingleInsert(t *testing.T) {
 
 func TestMultyInsert(t *testing.T) {
 	// t.Logf("Starting from second user: %#v;", users[1:])
-	m := modelx.NewModel[Users](users[1:]...)
+	m := modelx.NewModel(users[1:]...)
 	r, e := m.Insert()
 	t.Logf("sql.Result:%#v; Error:%#v;", r, e)
 }
@@ -137,7 +138,7 @@ func TestSelect(t *testing.T) {
 	tests := []struct {
 		name, where string
 		bindData    map[string]any
-		lAndOff     [2]int
+		lAndOff     []int
 		lastID      int32
 	}{
 		{
@@ -152,7 +153,7 @@ func TestSelect(t *testing.T) {
 			name:     `WithLimit`,
 			where:    ``,
 			bindData: nil,
-			lAndOff:  [...]int{2, 0},
+			lAndOff:  []int{2, 0},
 			lastID:   2,
 		},
 		{
@@ -160,7 +161,7 @@ func TestSelect(t *testing.T) {
 			name:     `WithLimitAndOffset`,
 			where:    ``,
 			bindData: nil,
-			lAndOff:  [...]int{2, 1},
+			lAndOff:  []int{2, 1},
 			lastID:   3,
 		},
 		{
@@ -173,13 +174,13 @@ func TestSelect(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := m.Select(tc.where, tc.bindData, tc.lAndOff)
+			rows, err := m.Select(tc.where, tc.bindData, tc.lAndOff...)
 			if err != nil {
 				t.Errorf("Error: %#v", err)
 			}
-			dataLen := int32(len(m.Data()))
-			if m.Data()[dataLen-1].ID != tc.lastID {
-				t.Errorf("Expected last.ID to be %d. Got %d", tc.lastID, m.Data()[dataLen-1].ID)
+			dataLen := int32(len(rows))
+			if rows[dataLen-1].ID != tc.lastID {
+				t.Errorf("Expected last.ID to be %d. Got %d", tc.lastID, rows[dataLen-1].ID)
 			}
 		})
 	}
@@ -192,6 +193,8 @@ func TestUpdate(t *testing.T) {
 		set         map[string]any
 		bind        map[string]any
 		affected    int64
+		structSet   any
+		sctructBind any
 	}{
 		{
 			name:     `One`,
@@ -206,11 +209,30 @@ func TestUpdate(t *testing.T) {
 			where:    `WHERE id IN(SELECT id FROM users WHERE ID>1)`,
 			affected: 2,
 		},
+		//		{
+		//			name:     `StructSet`,
+		//			where:    `WHERE id=:id`,
+		//			bind:     map[string]any{`id`: 1},
+		//			affected: 1,
+		//			structSet: struct {
+		//				ID        int32
+		//				LoginName string
+		//			}{LoginName: `struct_updated`, ID: 1},
+		//		},
 	}
 
 	for i, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			r, e := m.Update(tc.set, tc.where, tc.bind)
+			var (
+				r sql.Result
+				e error
+			)
+			if tc.structSet == nil {
+				maps.Copy(tc.set, tc.bind)
+				r, e = m.Update(modelx.SQLForSET(tc.set), tc.where, tc.set)
+			} else {
+				r, e = m.Update(modelx.SQLForSET(tc.structSet), tc.where, tc.structSet)
+			}
 			if e != nil {
 				t.Errorf("Error updating one record: %#v", e)
 				return
@@ -223,7 +245,7 @@ func TestUpdate(t *testing.T) {
 				t.Logf("RowsAffected: %d", rows)
 			}
 
-			m.Select(tc.where, tc.bind, [2]int{0, 0})
+			m.Select(tc.where, tc.bintd)
 			if i == 0 && m.Data()[0].LoginName != tc.set[`login_name`] {
 				t.Errorf(`Expected login_name to be %s, but it is %s!`,
 					tc.set[`login_name`], m.Data()[0].LoginName)
