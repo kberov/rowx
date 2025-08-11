@@ -2,6 +2,7 @@ package modelx
 
 import (
 	"strings"
+	"unicode"
 
 	"github.com/valyala/fasttemplate"
 )
@@ -34,28 +35,30 @@ partial SQL keys from [QueryTemplates] and then the keys from the given stash
 with values. Returns the produced SQL. Panics if key not found or not of the expected type (string).
 */
 func RenderSQLTemplate(key string, stash map[string]any) string {
-	// TODO: Can we minimize memory realocation for strings here?
 	return replace(replace(QueryTemplates[key].(string), "${", "}", QueryTemplates), "${", "}", stash)
 }
 
 /*
-SQLForSET produces the `SET column=:column_value,...` for an UPDATE query from
-a list of columns, probably produced by [Modelx.Columns]. Names mentioned in
-WHERE are excluded if `exclude` is set to true. The function is exported for
-constructing SQL in custom cases.
+SQLForSET produces the `SET column = :column,...` for an UPDATE query from
+a list of columns. It also makes each column snake_case if it starts with a
+capital letter.
 */
-func SQLForSET(columns []string, where string, exclude bool) string {
+func SQLForSET(columns []string) string {
 	var set strings.Builder
 	set.WriteString(`SET`)
 	for _, v := range columns {
-		if exclude && strings.Contains(where, `:`+v) {
-			continue
+		for _, r := range v {
+			if unicode.IsUpper(r) {
+				v = camelToSnakeCase(v)
+				break
+			}
+			break
 		}
+
 		set.WriteString(sprintf(` %s = :%[1]s,`, v))
 	}
 	setStr := set.String()
 	Logger.Debugf(`SQL from SQLForSET:'%s'`, setStr)
 	// s[:len(s)-1] == return strings.TrimRight(set.String(), `,`)
 	return setStr[:len(setStr)-1]
-
 }

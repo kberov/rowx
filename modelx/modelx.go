@@ -112,7 +112,7 @@ its implementation and override some of its methods.
 */
 type SqlxModelUpdater[R SqlxRows] interface {
 	Table() string
-	Update(string, bool) (sql.Result, error)
+	Update([]string, string) (sql.Result, error)
 }
 
 /*
@@ -185,8 +185,9 @@ func modelToTable[R SqlxRows](rows R) string {
 	return camelToSnakeCase(table)
 }
 
-// camelToSnakeCase is used to convert structure fields to
-// snake case table columns by sqlx.DB.MapperFunc.
+// camelToSnakeCase is used to convert structure fields to snake case table
+// columns by sqlx.DB.MapperFunc. UserLastFiveComments becomes
+// user_last_five_comments.
 func camelToSnakeCase(text string) string {
 	if utf8.RuneCountInString(text) == 2 {
 		return strings.ToLower(text)
@@ -204,15 +205,13 @@ func lowerLetter(snakeCase *strings.Builder, r rune, wordBegins, prevWasUpper bo
 	if unicode.IsUpper(r) && !wordBegins {
 		snakeCase.WriteString(connector)
 		snakeCase.WriteRune(unicode.ToLower(r))
-		wordBegins = true
-		prevWasUpper = true
+		wordBegins, prevWasUpper = true, true
 		return wordBegins, prevWasUpper
 	}
 	// handle case `ID` and beginning of word
 	if wordBegins && prevWasUpper {
 		snakeCase.WriteRune(unicode.ToLower(r))
-		wordBegins = false
-		prevWasUpper = false
+		wordBegins, prevWasUpper = false, false
 		return wordBegins, prevWasUpper
 	}
 	snakeCase.WriteRune(r)
@@ -340,11 +339,25 @@ func (m *Modelx[R]) Select(where string, bindData any, limitAndOffset ...int) ([
 	query := RenderSQLTemplate(`SELECT`, stash)
 	Logger.Debugf("Constructed query : %s", query)
 	m.data = make([]R, 0, limitAndOffset[0])
-	if stmt, err := DB().PrepareNamed(query); err != nil {
-		return nil, fmt.Errorf("error from DB().PrepareNamed(SQL): %w", err)
-	} else if err = stmt.Select(&m.data, bindData); err != nil {
-		return nil, fmt.Errorf("error from stmt.Select(&m.data, bindData): %w", err)
+
+	q, args, err := sqlx.Named(query, bindData)
+	if err != nil {
+		return nil, err
 	}
+	q, args, err = sqlx.In(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	q = DB().Rebind(q)
+	if err := DB().Select(&m.data, q, args...); err != nil {
+		Logger.Debugf("Select q :'%s', args:'%#v', err:'%#v'", query, args, err)
+		return nil, err
+	}
+	//	if stmt, err := DB().PrepareNamed(query); err != nil {
+	//		return nil, fmt.Errorf("error from DB().PrepareNamed(SQL): %w", err)
+	//	} else if err = stmt.Select(&m.data, bindData); err != nil {
+	//		return nil, fmt.Errorf("error from stmt.Select(&m.data, bindData): %w", err)
+	//	}
 	return m.data, nil
 }
 
@@ -353,14 +366,11 @@ Update constructs a Named UPDATE query and executes it. We assume that the bind
 data parameter for [sqlx.DB.NamedExec] is each element of the slice of passed
 SqlxRows to [NewModelx].
 
-If exclude is set to true, the parameter `where` is scanned for field names to
-exclude fields, used as search criteria in the WHERE clause. The fields, not
-used in WHERE clause, are used for the SET clause. The operation is always
-performed in a transaction.
+`columns` is the list of columns to be updated - used in `SET col = :col...`.
 
 For any case in which this method is not suitable, use directly sqlx.
 */
-func (m *Modelx[R]) Update(where string, exclude bool) (sql.Result, error) {
+func (m *Modelx[R]) Update(columns []string, where string) (sql.Result, error) {
 	var (
 		tx *sqlx.Tx
 		r  sql.Result
@@ -375,7 +385,7 @@ func (m *Modelx[R]) Update(where string, exclude bool) (sql.Result, error) {
 	stash := map[string]any{
 		`table`: m.Table(),
 		// Do not update ID in any case.
-		`SET`:   SQLForSET(m.Columns(), where, exclude),
+		`SET`:   SQLForSET(columns),
 		`WHERE`: where,
 	}
 	query := RenderSQLTemplate(`UPDATE`, stash)

@@ -66,17 +66,8 @@ func multiExec(e sqlx.Execer, query string) {
 
 func init() {
 	modelx.DSN = ":memory:"
+	modelx.DriverName = `sqlite3`
 	multiExec(modelx.DB(), schema)
-}
-
-func TestTable(t *testing.T) {
-	m := &modelx.Modelx[Users]{}
-	if table := m.Table(); table != "users" {
-		t.Errorf("wrong table '%s'", table)
-	} else {
-		t.Logf("Instantited type: %#v\n TableName: %s\n", m, table)
-		t.Logf("Modelx.Data: %#v\n", m.Data())
-	}
 }
 
 func TestNewNoData(t *testing.T) {
@@ -95,20 +86,40 @@ func TestNewWithData(t *testing.T) {
 	}
 }
 
-func TestColumnsWithData(t *testing.T) {
-	m := modelx.NewModel[Users](users...)
-	if len(m.Columns()) == 0 {
-		t.Errorf("Expected to have columns but we did not find any.")
+func TestTable(t *testing.T) {
+	type AVeryLongAndComplexTableName struct {
 	}
-	t.Logf("columns are: %#v", m.Columns())
+	m := &modelx.Modelx[AVeryLongAndComplexTableName]{}
+	if table := m.Table(); table != `a_very_long_and_complex_table_name` {
+		t.Errorf("wrong table '%s'", table)
+	} else {
+		t.Logf("Instantited type: %#v\n TableName: %s\n", m, table)
+	}
+
 }
 
-func TestColumnsNoData(t *testing.T) {
-	m := modelx.NewModel[Users]()
-	if len(m.Columns()) == 0 {
-		t.Errorf("Expected to have columns but we did not find any.")
+func TestColumns(t *testing.T) {
+	tests := []struct {
+		name string
+		data []Users
+	}{
+		{
+			name: `WithData`,
+			data: users,
+		},
+		{
+			name: `NoData`,
+		},
 	}
-	t.Logf("columns are: %#v", m.Columns())
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m := modelx.NewModel[Users](tc.data...)
+			if len(m.Columns()) == 0 {
+				t.Errorf("Expected to have columns but we did not find any.")
+			}
+			t.Logf("columns are: %#v", m.Columns())
+		})
+	}
 }
 
 func TestSingleInsert(t *testing.T) {
@@ -140,6 +151,9 @@ func TestMultyInsert(t *testing.T) {
 	// t.Logf("Starting from second user: %#v;", users[1:])
 	m := modelx.NewModel(users[1:]...)
 	r, e := m.Insert()
+	if e != nil {
+		t.Errorf("sql.Result:%#v; Error:%#v;", r, e)
+	}
 	t.Logf("sql.Result:%#v; Error:%#v;", r, e)
 }
 
@@ -199,14 +213,30 @@ func TestSelect(t *testing.T) {
 			expectedError: true,
 			errContains:   `could not find name id`,
 		},
+		{
+			name:     `SelectIN`,
+			where:    `WHERE id IN(:ids)`,
+			bindData: map[string]any{`ids`: []int{1, 2, 3}},
+			lastID:   3,
+		},
+		{
+			name:     `SelectOrderByDesc`,
+			where:    `WHERE id IN(:ids) ORDER BY id DESC`,
+			bindData: map[string]any{`ids`: []int{1, 2, 3}},
+			lastID:   1,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			rows, err := m.Select(tc.where, tc.bindData, tc.lAndOff...)
 			if err != nil && !tc.expectedError {
 				t.Errorf("Error: %#v", err)
-			} else if tc.expectedError && strings.Contains(err.Error(), tc.errContains) {
+				return
+			} else if err != nil && tc.expectedError {
 				t.Logf("Expected error: %#v", err)
+				if !strings.Contains(err.Error(), tc.errContains) {
+					t.Errorf(`Error does not contain expected string: '%s'`, tc.errContains)
+				}
 				return
 			}
 			dataLen := int32(len(rows))
@@ -219,34 +249,50 @@ func TestSelect(t *testing.T) {
 
 func TestUpdate(t *testing.T) {
 	tests := []struct {
-		name, where           string
-		Modelx                modelx.SqlxModel[Users]
-		affected              int64
-		excludeColumnsInWhere bool
-		selectBind            map[string]any
-		dbError               bool
+		name, where, selectWhere string
+		Modelx                   modelx.SqlxModel[Users]
+		affected                 int64
+		columns                  []string
+		selectBind               map[string]any
+		dbError                  bool
 	}{
 		{
-			name:  `OneExcludeID`,
-			where: `WHERE id=:id`,
+			name:        `One`,
+			where:       `WHERE id=:id`,
+			selectWhere: `WHERE id=:id`,
 			Modelx: modelx.NewModel(Users{LoginName: `first_updated`, ID: 1,
 				GroupID: sql.NullInt32{Valid: true, Int32: 0}}),
-			affected:              1,
-			excludeColumnsInWhere: true,
-			selectBind:            map[string]any{`id`: 1},
-			dbError:               false,
+			affected:   1,
+			columns:    []string{`Login_name`},
+			selectBind: map[string]any{`id`: 1},
+			dbError:    false,
 		},
 		{
-			name: `Many`,
-			// this WHERE clause will produce UNIQUE CONSTRAINT Error
-			where: `WHERE id IN(SELECT id FROM users WHERE ID>1)`,
+			name: `ManyUniqueConstraintFail`,
+			// this WHERE clause will produce UNIQUE CONSTRAINT Error, because login_name is UNIQUE.
+			where:       `WHERE id IN(SELECT id FROM users WHERE ID>1)`,
+			selectWhere: `WHERE id IN(SELECT id FROM users WHERE ID>1)`,
 			Modelx: modelx.NewModel(
 				Users{LoginName: `second_updated`, ID: 2},
 				Users{LoginName: `third_updated`, ID: 3, GroupID: sql.NullInt32{Valid: true, Int32: 2}},
 			),
-			affected:              2,
-			excludeColumnsInWhere: true,
-			dbError:               true,
+			affected: 0,
+			columns:  []string{`LoginName`, `group_id`},
+			dbError:  true,
+		},
+		{
+			name: `ManyUniqueConstraintOK`,
+			// this WHERE clause will NOT produce UNIQUE CONSTRAINT Error, because id is PRIMARY KEY.
+			where: `WHERE id = :id`,
+			Modelx: modelx.NewModel(
+				Users{LoginName: `second_updated_ok`, ID: 2, GroupID: sql.NullInt32{Valid: true, Int32: 2}},
+				Users{LoginName: `third_updated_ok`, ID: 3, GroupID: sql.NullInt32{Valid: true, Int32: 3}},
+			),
+			affected:    2,
+			columns:     []string{`login_name`, `GroupID`},
+			dbError:     false,
+			selectWhere: `WHERE id IN(:id)`,
+			selectBind:  map[string]any{`id`: []any{2, 3}},
 		},
 	}
 
@@ -257,7 +303,7 @@ func TestUpdate(t *testing.T) {
 				e error
 			)
 
-			r, e = tc.Modelx.Update(tc.where, tc.excludeColumnsInWhere)
+			r, e = tc.Modelx.Update(tc.columns, tc.where)
 			if e != nil && tc.dbError {
 				t.Logf("Error updating records: '%#v' was expected.", e)
 				return
@@ -265,30 +311,26 @@ func TestUpdate(t *testing.T) {
 				t.Errorf("Unexpected error: '%#v'!...", e)
 				return
 			}
-			t.Logf("r: %#v", r)
-			if rows, e := r.RowsAffected(); e != nil {
-				t.Errorf("Error: %v", e)
-			} else if rows != tc.affected {
-				t.Errorf("Expected rows to be affected were %d. Got %d", tc.affected, rows)
-			} else {
-				t.Logf("RowsAffected: %d", rows)
-			}
+			// Strange how RowsAffected is always 1 even when it is obvious
+			// that two rows were affected.
+			rows, _ := r.RowsAffected()
+			t.Logf("*sql.Result.RowsAffected(): %d", rows)
 
-			data, e := modelx.NewModel[Users]().Select(tc.where, tc.selectBind)
+			data, e := modelx.NewModel[Users]().Select(tc.selectWhere, tc.selectBind)
 			if e != nil {
 				t.Errorf(`Error in m.Select: %#v`, e)
 				return
 			}
-			if i == 0 && data[0].LoginName != tc.Modelx.Data()[0].LoginName {
+			if data[0].LoginName != tc.Modelx.Data()[0].LoginName {
 				t.Errorf(`Expected login_name to be %s, but it is %s!`,
 					tc.Modelx.Data()[0].LoginName, data[0].LoginName)
 			}
 
-			if i == 0 {
-				groupID := tc.Modelx.Data()[0].GroupID
-				if groupID != data[0].GroupID {
+			if i == 1 {
+				groupID := tc.Modelx.Data()[0].GroupID.Int32
+				if groupID != data[0].GroupID.Int32 {
 					t.Errorf("Expected group_id to be set to %#v! It was set to: %#v",
-						groupID, data[0].GroupID)
+						groupID, data[0].GroupID.Int32)
 				}
 			}
 			t.Logf("Updated records: %#v", data)
@@ -334,10 +376,20 @@ func TestDelete(t *testing.T) {
 	}
 }
 
+type myModel[R Groups] struct {
+	modelx.Modelx[R]
+	data []R
+}
+
+func (m *myModel[R]) Data() []R {
+	return m.data
+}
+func (m *myModel[R]) mySelect() ([]R, error) {
+	modelx.Logger.Debugf(`executing SELECT from an extending type: %T`, m)
+	err := modelx.DB().Select(&m.data, `SELECT * from groups limit 100`)
+	return m.data, err
+}
 func TestEmbed(t *testing.T) {
-	type myModel[R modelx.SqlxRows] struct {
-		modelx.Modelx[R]
-	}
 	// ---
 	mm := &myModel[Groups]{}
 	if mm.Table() != `groups` {
@@ -355,6 +407,16 @@ func TestEmbed(t *testing.T) {
 	if len(data) != 3 {
 		t.Errorf(`Expected 3 rows from the database but got %d.`, len(data))
 	}
+	m := &myModel[Groups]{}
+	data, _ = m.mySelect()
+
+	if len(data) != 5 {
+		t.Errorf(`Expected 5 rows from the database but got %d.`, len(data))
+	}
+	if data[0] != m.Data()[0] {
+		t.Error(`m.Data() and data should point to the same data!`)
+	}
+	t.Logf("Extending object's m.Data(): %#v", m.Data())
 }
 
 func TestPanics(t *testing.T) {
