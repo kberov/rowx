@@ -1,11 +1,10 @@
 /*
-Package modelx provides interfaces and a generic data type, implementing
-the interfaces to work easily with database records and sets of records.
-Underneath [sqlx] is used. Package modelx provides just an object
-mapper. The relations' constraints are left to be managed by the database.
-If you embed (extend) the data type [Modelx], you get automatically
-the respective implementation and can overwrite methods to customise them for
-your needs.
+Package modelx provides interfaces and a generic data type, implementing the
+interfaces to work easily with database records and sets of records. Underneath
+[sqlx] is used. Package modelx provides just an object mapper. The relations'
+constraints are left to be managed by the database and you. If you embed
+(extend) the data type [Modelx], you get automatically the respective
+implementation and can overwrite methods to customise them for your needs.
 
 Caveat: The current implementation naively assumes that the primary key name is
 `ID`. Of course the primary key can be more than one column and with arbitrary
@@ -40,7 +39,13 @@ var (
 	// singleDB is a singleton connection to the database.
 	singleDB *sqlx.DB
 	sprintf  = fmt.Sprintf
+	// Make sure that Modelx implements the full SqlxModel interface.
+	_ SqlxModel[alabala] = (*Modelx[alabala])(nil)
 )
+
+type alabala struct {
+	ID int32
+}
 
 /*
 DB  instantiates the [log.Logger], invokes [sqlx.MustConnect] and sets the
@@ -64,18 +69,15 @@ func DB() *sqlx.DB {
 }
 
 /*
-SqlxRows is an interface and generic constraint for database records. TODO? See
-if we need to implement this interface or the Modelx will be enough.
+SqlxRows is an interface and generic constraint for database records.
 */
 type SqlxRows interface {
-	// Insert this prepared record into it's table.
-	// Insert() error - TODO: insert record with specific ID value
-	// Select (Get) one record by ID
-	// GetByID() error - TODO
-	// Update this record.
-	// Update() error
-	// Delete this record
-	// Delete() error
+	// Select one record from its table.
+	//	Get(...any) error
+	//	// List of columns which make this record unique.
+	//	PrimaryKeys() []string
+	//	Table()
+	//	Columns()
 }
 
 /*
@@ -135,8 +137,49 @@ type SqlxModelDeleter[R SqlxRows] interface {
 }
 
 /*
-Modelx implements SqlxModel interface and can be embedded (extended) to
-customise its behaviour for your own needs.
+Modelx implements the [SqlxModel] interface and can be used right away or
+embedded (extended) to customise its behaviour for your own needs.
+
+Direct usage:
+
+	type Users struct {
+		ID        int32
+		LoginName string
+		// ...
+	}
+
+	var users = []Users{
+		Users{LoginName: "first"},
+		Users{LoginName: "the_second"},
+		Users{LoginName: "the_third"},
+	}
+
+	m := modelx.NewModel[Users](users)
+	r, e := m.Insert()
+	if e != nil {
+		fmt.Fprintf(os.Stderr, "Got error from m.Insert(): %s", e.Error())
+		return
+	}
+
+To embed this type, write something similar to the following:
+
+	// MyModel requires that the records implement the SQLxRows interface.
+	type MyModel[R SQLxRows] struct {
+		modelx.Modelx[R]
+		data []R
+	}
+	// Data returns the collected data from a Select or provided objects.
+	func (m *MyModel[R]) Data() []R {
+		return m.data
+	}
+	// Now you can implement some custom methods to insert, select, update and
+	// delete your sets of records. Maybe some custom constructor.
+	//...
+	// Somewhere else in the code, using your class...
+	mm = new(myModel[Users])
+	// WHERE clause can be as complex as you need.
+	data, err := mm.Select(`WHERE id >:id`, map[string]any{`id`: 1}.
+	// And you can implement your own Columns() and Table()...
 */
 type Modelx[R SqlxRows] struct {
 	/*
@@ -172,7 +215,7 @@ func (m *Modelx[R]) Table() string {
 	return m.table
 }
 
-// Data returns the slice of structs, passed to NewModel(). It may return nil
+// Data returns the slice of structs, passed to [NewModel]. It may return nil
 // if no rows are passed.
 func (m *Modelx[R]) Data() []R {
 	return m.data
@@ -187,6 +230,8 @@ func (m *Modelx[R]) Columns() []string {
 	if m.columns != nil {
 		return m.columns
 	}
+	// TODO: Some day... use go:generate to move such code to compile time for
+	// SqlxRows implementing types.
 	colMap := DB().Mapper.TypeMap(reflect.ValueOf(new(R)).Type()).Names
 	m.columns = make([]string, 0, len(colMap))
 	for k := range colMap {
