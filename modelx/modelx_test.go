@@ -140,7 +140,7 @@ func TestSingleInsert(t *testing.T) {
 		t.Logf("RowsAffected: %d", r)
 	}
 	u := &Users{}
-	modelx.DB().Get(u, `SELECT * FROM users WHERE id=? LIMIT 1`, 1)
+	modelx.DB().Get(u, `SELECT * FROM users WHERE id=?`, 1)
 	if u.LoginName != users[0].LoginName {
 		t.Errorf("Expected LoginName: %s. Got: %s!", users[0].LoginName, u.LoginName)
 	}
@@ -249,12 +249,14 @@ func TestSelect(t *testing.T) {
 
 func TestUpdate(t *testing.T) {
 	tests := []struct {
-		name, where, selectWhere string
-		Modelx                   modelx.SqlxModel[Users]
-		affected                 int64
-		columns                  []string
-		selectBind               map[string]any
-		dbError                  bool
+		name        string
+		where       string
+		selectWhere string
+		Modelx      modelx.SqlxModel[Users]
+		affected    int64
+		columns     []string
+		selectBind  map[string]any
+		dbError     bool
 	}{
 		{
 			name:        `One`,

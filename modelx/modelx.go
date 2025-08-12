@@ -20,8 +20,6 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/labstack/gommon/log"
@@ -61,7 +59,7 @@ func DB() *sqlx.DB {
 	Logger.Debugf("Connecting to database '%s'...", DSN)
 
 	singleDB = sqlx.MustConnect(DriverName, DSN)
-	singleDB.MapperFunc(camelToSnakeCase)
+	singleDB.MapperFunc(CamelToSnakeCase)
 	return singleDB
 }
 
@@ -170,52 +168,8 @@ func (m *Modelx[R]) Table() string {
 	if m.table != "" {
 		return m.table
 	}
-	m.table = modelToTable(new(R))
+	m.table = TypeToSnakeCase(new(R))
 	return m.table
-}
-
-// modelToTable converts struct type name like *model.Users to
-// 'users' and returns it. Panics if unsuccessful.
-func modelToTable[R SqlxRows](rows R) string {
-	typestr := sprintf("%T", rows)
-	_, table, ok := strings.Cut(typestr, ".")
-	if !ok {
-		Logger.Panicf("Could not derive table name from type '%s'!", typestr)
-	}
-	return camelToSnakeCase(table)
-}
-
-// camelToSnakeCase is used to convert structure fields to snake case table
-// columns by sqlx.DB.MapperFunc. UserLastFiveComments becomes
-// user_last_five_comments.
-func camelToSnakeCase(text string) string {
-	if utf8.RuneCountInString(text) == 2 {
-		return strings.ToLower(text)
-	}
-	var snakeCase strings.Builder
-	var wordBegins = true
-	var prevWasUpper = true
-	for _, r := range text {
-		wordBegins, prevWasUpper = lowerLetter(&snakeCase, r, wordBegins, prevWasUpper, "_")
-	}
-	return snakeCase.String()
-}
-
-func lowerLetter(snakeCase *strings.Builder, r rune, wordBegins, prevWasUpper bool, connector string) (bool, bool) {
-	if unicode.IsUpper(r) && !wordBegins {
-		snakeCase.WriteString(connector)
-		snakeCase.WriteRune(unicode.ToLower(r))
-		wordBegins, prevWasUpper = true, true
-		return wordBegins, prevWasUpper
-	}
-	// handle case `ID` and beginning of word
-	if wordBegins && prevWasUpper {
-		snakeCase.WriteRune(unicode.ToLower(r))
-		wordBegins, prevWasUpper = false, false
-		return wordBegins, prevWasUpper
-	}
-	snakeCase.WriteRune(r)
-	return wordBegins, prevWasUpper
 }
 
 // Data returns the slice of structs, passed to NewModel(). It may return nil
@@ -270,16 +224,14 @@ func (m *Modelx[R]) Insert() (sql.Result, error) {
 		`placeholders`: placeholders,
 	}
 	query := RenderSQLTemplate(`INSERT`, stash)
-	Logger.Debugf("INSERT query from fasttemplate: %s", query)
+	Logger.Debugf("Rendered query: %s", query)
 	if dataLen > 1 {
 		var (
 			tx *sqlx.Tx
 			r  sql.Result
 			e  error
 		)
-		if tx, e = DB().Beginx(); e != nil {
-			return nil, e
-		}
+		tx = DB().MustBegin()
 		// The rollback will be ignored if the tx has been committed already.
 		defer func() { _ = tx.Rollback() }()
 		for _, row := range m.data {
@@ -313,11 +265,11 @@ func (m *Modelx[R]) colsWithoutID() []string {
 }
 
 /*
-Select prepares and executes a [sqlx.DB.PrepareNamed] and
-[sqlx.NamedStmt.Select]. Selected records can be used with [SqlxModel.Data].
-`limitAndOffset` is a variadic variable. If passed, it is expected to consist
-of two values limit and offset - in that order. The default value  for LIMIT
-can be set by [DefaultLimit]. OFFSET is 0 by default.
+Select prepares and executes a SELECT statement. Selected records can be used
+with [SqlxModel.Data].`limitAndOffset` is expected to be used as a variadic
+parameter. If passed, it is expected to consist of two values limit and offset
+- in that order. The default value  for LIMIT can be set by [DefaultLimit].
+OFFSET is 0 by default.
 */
 func (m *Modelx[R]) Select(where string, bindData any, limitAndOffset ...int) ([]R, error) {
 	if len(limitAndOffset) == 0 {
@@ -337,7 +289,7 @@ func (m *Modelx[R]) Select(where string, bindData any, limitAndOffset ...int) ([
 		`offset`:  strconv.Itoa(limitAndOffset[1]),
 	}
 	query := RenderSQLTemplate(`SELECT`, stash)
-	Logger.Debugf("Constructed query : %s", query)
+	Logger.Debugf("Rendered query : %s", query)
 	m.data = make([]R, 0, limitAndOffset[0])
 
 	q, args, err := sqlx.Named(query, bindData)
@@ -366,30 +318,29 @@ Update constructs a Named UPDATE query and executes it. We assume that the bind
 data parameter for [sqlx.DB.NamedExec] is each element of the slice of passed
 SqlxRows to [NewModelx].
 
-`columns` is the list of columns to be updated - used in `SET col = :col...`.
+`fields` is the list of columns to be updated - used in `SET col = :col...`. If
+a field starts with UppercaseLetter it is converted to snake_case.
 
 For any case in which this method is not suitable, use directly sqlx.
 */
-func (m *Modelx[R]) Update(columns []string, where string) (sql.Result, error) {
+func (m *Modelx[R]) Update(fields []string, where string) (sql.Result, error) {
 	var (
 		tx *sqlx.Tx
 		r  sql.Result
 		e  error
 	)
-	if tx, e = DB().Beginx(); e != nil {
-		return nil, e
-	}
+	tx = DB().MustBegin()
 	// The rollback will be ignored if the tx has been committed already.
 	defer func() { _ = tx.Rollback() }()
 
 	stash := map[string]any{
 		`table`: m.Table(),
 		// Do not update ID in any case.
-		`SET`:   SQLForSET(columns),
+		`SET`:   SQLForSET(fields),
 		`WHERE`: where,
 	}
 	query := RenderSQLTemplate(`UPDATE`, stash)
-	Logger.Debugf("Constructed query : %s", query)
+	Logger.Debugf("Rendered query : %s", query)
 	stmt, e := tx.PrepareNamed(query)
 	if e != nil {
 		return nil, e

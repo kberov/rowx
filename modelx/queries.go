@@ -49,7 +49,7 @@ func SQLForSET(columns []string) string {
 	for _, v := range columns {
 		for _, r := range v {
 			if unicode.IsUpper(r) {
-				v = camelToSnakeCase(v)
+				v = CamelToSnakeCase(v)
 				break
 			}
 			break
