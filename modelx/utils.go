@@ -8,7 +8,7 @@ import (
 
 // TypeToSnakeCase converts struct type name like *model.Users to
 // 'users' and returns it. Panics if unsuccessful.
-func TypeToSnakeCase[R SqlxRows](rows R) string {
+func TypeToSnakeCase[R SqlxRows](rows *R) string {
 	typestr := sprintf("%T", rows)
 	_, table, ok := strings.Cut(typestr, ".")
 	if !ok {

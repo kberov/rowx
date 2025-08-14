@@ -44,6 +44,7 @@ var (
 )
 
 type alabala struct {
+	*Rowx[alabala]
 	ID int32
 }
 
@@ -74,10 +75,47 @@ SqlxRows is an interface and generic constraint for database records.
 type SqlxRows interface {
 	// Select one record from its table.
 	//	Get(...any) error
-	//	// List of columns which make this record unique.
-	//	PrimaryKeys() []string
+	// List of columns which make this record unique.
+	PrimaryKeys() []string
 	//	Table()
 	//	Columns()
+}
+
+/*
+Rowx is the base type for all structs which represent a database row in a
+table. It keeps the metadata retreived from the type it self about table and
+columns' names.
+*/
+type Rowx[R SqlxRows] struct {
+	table   string
+	columns []string
+}
+
+// PrimaryKeys returns a slice of one element {`id`}. The purpose is to have an
+// overwritable default for types, which embed Rowx[R].
+func (r *Rowx[R]) PrimaryKeys() []string {
+	return []string{`id`}
+}
+
+// Table returns the guessed table name from the type parameter of the record.
+func (r *Rowx[R]) Table() string {
+	if r.table != "" {
+		return r.table
+	}
+	r.table = TypeToSnakeCase(new(R))
+	return r.table
+}
+
+/*
+Columns returns a slice with the names of the table's columns in no particular
+order.
+*/
+func (r *Rowx[R]) Columns() []string {
+	if len(r.columns) > 0 {
+		return r.columns
+	}
+	r.columns = columns[R]()
+	return r.columns
 }
 
 /*
@@ -206,7 +244,7 @@ func NewModel[R SqlxRows](rows ...R) SqlxModel[R] {
 	return &Modelx[R]{}
 }
 
-// Table returns the guessed table name from the Data type parameter.
+// Table returns the guessed table name from the type parameter.
 func (m *Modelx[R]) Table() string {
 	if m.table != "" {
 		return m.table
@@ -223,25 +261,56 @@ func (m *Modelx[R]) Data() []R {
 
 /*
 Columns returns a slice with the names of the table's columns in no particular
-order. Because the order may be different on each instantation of [Modelx], we
-use internally [sqlx.NamedExec], [sqlx.DB.PrepareNamed] etc.
+order.
 */
 func (m *Modelx[R]) Columns() []string {
-	if m.columns != nil {
+	if len(m.columns) > 0 {
 		return m.columns
 	}
-	// TODO: Some day... use go:generate to move such code to compile time for
-	// SqlxRows implementing types.
+	m.columns = columns[R]()
+	return m.columns
+}
+
+func columns[R SqlxRows]() []string {
+	/*
+		TODO: Some day... use go:generate to move such code to compile time for
+		SqlxRows implementing types. Consider also a solution to (eventually
+		gradually) regenerate Rowx embedding types and recompile the application
+		due to changes in the database schema. This is how we can implement
+		database migrations starting from the database.
+		1. During development the owner of the user code changes the development
+		database and runs `go generate && go build -ldflags "-s -w" ./...` to
+		(re-)generate types which will embed Rowx. Then recompiles the
+		application.
+		2. Next he/she prepares the sql migration file to be run on the
+		production database. It should not be harmfull if some defined fields in
+		the Rowx embedding types do not have corresponding columns in the
+		database, because they will have sane defaults, thanks to Go default
+		values. Also it will not harm if there are new columns in tables and
+		some types do not have yet the corresponding field. The only problematic
+		case is when a column in the database changes its type or a table is
+		dropped. To cover this case...
+		3. Deployment.
+			a. Dabase migration trough executing the prepared SQL file.
+			b. Disallow requests by showing a static page(Maintenance time -
+			this should take less than a second).
+			b. Imediately deploy the static binary. If it is a CGI application,
+			on the next request the updated binary will run. If it is a running
+			application (a (web-)service), immediately restart the application.
+		Consider carefully!:
+		https://stackoverflow.com/questions/55934210/creating-structs-programmatically-at-runtime-possible
+		https://agirlamonggeeks.com/golang-dynamic-lly-generate-struct/
+	*/
 	colMap := DB().Mapper.TypeMap(reflect.ValueOf(new(R)).Type()).Names
-	m.columns = make([]string, 0, len(colMap))
+	columns := make([]string, 0, len(colMap))
 	for k := range colMap {
 		if strings.Contains(k, `.`) {
 			continue
 		}
-		m.columns = append(m.columns, k)
+		columns = append(columns, k)
 	}
-	Logger.Debugf(`m.columns: %#v`, m.columns)
-	return m.columns
+	Logger.Debugf(`columns: %#v`, columns)
+	return columns
 }
 
 /*
@@ -285,7 +354,7 @@ func (m *Modelx[R]) Insert() (sql.Result, error) {
 				return r, e
 			}
 		}
-		if e := tx.Commit(); e != nil {
+		if e = tx.Commit(); e != nil {
 			return r, e
 		}
 		return r, e
@@ -397,7 +466,7 @@ func (m *Modelx[R]) Update(fields []string, where string) (sql.Result, error) {
 		}
 	}
 
-	if e := tx.Commit(); e != nil {
+	if e = tx.Commit(); e != nil {
 		return nil, e
 	}
 	return r, e

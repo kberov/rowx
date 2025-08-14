@@ -32,10 +32,11 @@ PRAGMA foreign_keys = ON;
 `
 
 type Users struct {
-	ID        int32
+	*modelx.Rowx[modelx.SqlxRows]
 	LoginName string
 	GroupID   sql.NullInt32
 	ChangedBy sql.NullInt32
+	ID        int32
 }
 
 var users = []Users{
@@ -45,9 +46,10 @@ var users = []Users{
 }
 
 type Groups struct {
-	ID        int32
+	*modelx.Rowx[modelx.SqlxRows]
 	Name      string
 	ChangedBy sql.NullInt32
+	ID        int32
 }
 
 // Stollen from sqlx_test.go
@@ -88,6 +90,7 @@ func TestNewWithData(t *testing.T) {
 
 func TestTable(t *testing.T) {
 	type AVeryLongAndComplexTableName struct {
+		*modelx.Rowx[modelx.SqlxRows]
 	}
 	m := &modelx.Modelx[AVeryLongAndComplexTableName]{}
 	if table := m.Table(); table != `a_very_long_and_complex_table_name` {
@@ -140,7 +143,7 @@ func TestSingleInsert(t *testing.T) {
 		t.Logf("RowsAffected: %d", r)
 	}
 	u := &Users{}
-	modelx.DB().Get(u, `SELECT * FROM users WHERE id=?`, 1)
+	_ = modelx.DB().Get(u, `SELECT * FROM users WHERE id=?`, 1)
 	if u.LoginName != users[0].LoginName {
 		t.Errorf("Expected LoginName: %s. Got: %s!", users[0].LoginName, u.LoginName)
 	}
@@ -161,11 +164,11 @@ func TestSelect(t *testing.T) {
 	m := modelx.NewModel[Users]()
 	tests := []struct {
 		name, where   string
+		errContains   string
 		bindData      map[string]any
 		lAndOff       []int
 		lastID        int32
 		expectedError bool
-		errContains   string
 	}{
 		{
 			// Does a SELECT with default LIMIT and OFFSET, without any WHERE clauses.
@@ -249,13 +252,13 @@ func TestSelect(t *testing.T) {
 
 func TestUpdate(t *testing.T) {
 	tests := []struct {
+		Modelx      modelx.SqlxModel[Users]
 		name        string
 		where       string
 		selectWhere string
-		Modelx      modelx.SqlxModel[Users]
-		affected    int64
-		columns     []string
 		selectBind  map[string]any
+		columns     []string
+		affected    int64
 		dbError     bool
 	}{
 		{
@@ -344,8 +347,8 @@ func TestDelete(t *testing.T) {
 	m := modelx.NewModel[Users]()
 	// TODO: add test case for bind where bind is a struct.
 	tests := []struct {
-		name, where string
 		bind        any
+		name, where string
 		affected    int64
 	}{
 		{
@@ -378,7 +381,7 @@ func TestDelete(t *testing.T) {
 	}
 }
 
-type myModel[R Groups] struct {
+type myModel[R modelx.SqlxRows] struct {
 	modelx.Modelx[R]
 	data []R
 }
@@ -423,20 +426,14 @@ func TestEmbed(t *testing.T) {
 
 func TestPanics(t *testing.T) {
 	tests := []struct {
-		name string
 		fn   func()
+		name string
 	}{
 		{
 			name: `InsertNoData`,
 			fn: func() {
 				g := modelx.NewModel[Groups]()
-				g.Insert()
-			},
-		},
-		{
-			name: `NoTable`,
-			fn: func() {
-				modelx.NewModel[struct{ ID int16 }]().Table()
+				_, _ = g.Insert()
 			},
 		},
 		{
