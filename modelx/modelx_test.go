@@ -27,8 +27,14 @@ INSERT INTO groups(id,name, changed_by) VALUES (1,'admins',1);
 INSERT INTO groups(id,name, changed_by) VALUES (2,'editors',1);
 INSERT INTO groups(id,name, changed_by) VALUES (3,'guests',1);
 INSERT INTO groups(id,name, changed_by) VALUES (4,'commenters',1);
+CREATE TABLE user_group (
+--  'ID of the user belonging to the group with group_id.'
+  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+--  'ID of the group to which the user with user_id belongs.'
+  group_id INTEGER REFERENCES groups(id) ON DELETE CASCADE,
+  PRIMARY KEY(user_id, group_id)
+)
 PRAGMA foreign_keys = ON;
-
 `
 
 type Users struct {
@@ -73,7 +79,7 @@ func init() {
 }
 
 func TestNewModelNoData(t *testing.T) {
-	m := modelx.NewModel[Users]()
+	m := modelx.NewModelx[Users]()
 	if m == nil {
 		t.Error("Could not instantiate Modelx")
 	}
@@ -81,7 +87,7 @@ func TestNewModelNoData(t *testing.T) {
 
 func TestNewModelWithData(t *testing.T) {
 	// type parameter is guessed from the type of the parameters.
-	m := modelx.NewModel(users...)
+	m := modelx.NewModelx(users...)
 	expected := len(users)
 	if i := len(m.Data()); i != expected {
 		t.Errorf("Expected rows: %d. Got: %d!", expected, i)
@@ -115,7 +121,7 @@ func TestColumns(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			m := modelx.NewModel[Users](tc.data...)
+			m := modelx.NewModelx[Users](tc.data...)
 			if len(m.Columns()) == 0 {
 				t.Errorf("Expected to have columns but we did not find any.")
 			}
@@ -125,7 +131,7 @@ func TestColumns(t *testing.T) {
 }
 
 func TestSingleInsert(t *testing.T) {
-	m := modelx.NewModel[Users](users[0])
+	m := modelx.NewModelx[Users](users[0])
 	r, e := m.Insert()
 	if e != nil {
 		t.Errorf("Got error from m.Insert(): %v", e)
@@ -151,7 +157,7 @@ func TestSingleInsert(t *testing.T) {
 
 func TestMultyInsert(t *testing.T) {
 	// t.Logf("Starting from second user: %#v;", users[1:])
-	m := modelx.NewModel(users[1:]...)
+	m := modelx.NewModelx(users[1:]...)
 	r, e := m.Insert()
 	if e != nil {
 		t.Errorf("sql.Result:%#v; Error:%#v;", r, e)
@@ -160,7 +166,7 @@ func TestMultyInsert(t *testing.T) {
 }
 
 func TestSelect(t *testing.T) {
-	m := modelx.NewModel[Users]()
+	m := modelx.NewModelx[Users]()
 	tests := []struct {
 		name, where   string
 		errContains   string
@@ -264,7 +270,7 @@ func TestUpdate(t *testing.T) {
 			name:        `One`,
 			where:       `WHERE id=:id`,
 			selectWhere: `WHERE id=:id`,
-			Modelx: modelx.NewModel(Users{LoginName: `first_updated`, ID: 1,
+			Modelx: modelx.NewModelx(Users{LoginName: `first_updated`, ID: 1,
 				GroupID: sql.NullInt32{Valid: true, Int32: 0}}),
 			affected:   1,
 			columns:    []string{`Login_name`},
@@ -276,7 +282,7 @@ func TestUpdate(t *testing.T) {
 			// this WHERE clause will produce UNIQUE CONSTRAINT Error, because login_name is UNIQUE.
 			where:       `WHERE id IN(SELECT id FROM users WHERE ID>1)`,
 			selectWhere: `WHERE id IN(SELECT id FROM users WHERE ID>1)`,
-			Modelx: modelx.NewModel(
+			Modelx: modelx.NewModelx(
 				Users{LoginName: `second_updated`, ID: 2},
 				Users{LoginName: `third_updated`, ID: 3, GroupID: sql.NullInt32{Valid: true, Int32: 2}},
 			),
@@ -288,7 +294,7 @@ func TestUpdate(t *testing.T) {
 			name: `ManyUniqueConstraintOK`,
 			// this WHERE clause will NOT produce UNIQUE CONSTRAINT Error, because id is PRIMARY KEY.
 			where: `WHERE id = :id`,
-			Modelx: modelx.NewModel(
+			Modelx: modelx.NewModelx(
 				Users{LoginName: `second_updated_ok`, ID: 2, GroupID: sql.NullInt32{Valid: true, Int32: 2}},
 				Users{LoginName: `third_updated_ok`, ID: 3, GroupID: sql.NullInt32{Valid: true, Int32: 3}},
 			),
@@ -320,7 +326,7 @@ func TestUpdate(t *testing.T) {
 			rows, _ := r.RowsAffected()
 			t.Logf("*sql.Result.RowsAffected(): %d", rows)
 
-			data, e := modelx.NewModel[Users]().Select(tc.selectWhere, tc.selectBind)
+			data, e := modelx.NewModelx[Users]().Select(tc.selectWhere, tc.selectBind)
 			if e != nil {
 				t.Errorf(`Error in m.Select: %#v`, e)
 				return
@@ -343,7 +349,7 @@ func TestUpdate(t *testing.T) {
 }
 
 func TestDelete(t *testing.T) {
-	m := modelx.NewModel[Users]()
+	m := modelx.NewModelx[Users]()
 	// TODO: add test case for bind where bind is a struct.
 	tests := []struct {
 		bind        any
@@ -431,7 +437,7 @@ func TestPanics(t *testing.T) {
 		{
 			name: `InsertNoData`,
 			fn: func() {
-				g := modelx.NewModel[Groups]()
+				g := modelx.NewModelx[Groups]()
 				_, _ = g.Insert()
 			},
 		},

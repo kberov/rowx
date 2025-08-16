@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/jmoiron/sqlx"
+	"github.com/jmoiron/sqlx/reflectx"
 	"github.com/labstack/gommon/log"
 )
 
@@ -96,6 +97,7 @@ Example:
 	}
 */
 type Rowx[R any] struct {
+	colMap  *reflectx.Mapper
 	table   string
 	columns []string
 }
@@ -244,9 +246,9 @@ type Modelx[R SqlxRows] struct {
 	columns []string
 }
 
-// NewModel returns a new instance of a table model with optionally provided
+// NewModelx returns a new instance of a table model with optionally provided
 // data rows as a variadic parameter.
-func NewModel[R SqlxRows](rows ...R) SqlxModel[R] {
+func NewModelx[R SqlxRows](rows ...R) SqlxModel[R] {
 	r := new(Rowx[R])
 	return &Modelx[R]{data: rows, columns: r.Columns(), table: r.Table()}
 }
@@ -260,15 +262,14 @@ func (m *Modelx[R]) Table() string {
 	return m.table
 }
 
-// Data returns the slice of structs, passed to [NewModel]. It may return nil
-// if no rows were passed to [NewModel].
+// Data returns the slice of structs, passed to [NewModelx]. It may return nil
+// if no rows were passed to [NewModelx].
 func (m *Modelx[R]) Data() []R {
 	return m.data
 }
 
 /*
-Columns returns a slice with the names of the table's columns in no particular
-order.
+Columns returns a slice with the names of the table's columns.
 */
 func (m *Modelx[R]) Columns() []string {
 	if len(m.columns) > 0 {
