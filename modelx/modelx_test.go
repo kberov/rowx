@@ -72,14 +72,14 @@ func init() {
 	multiExec(modelx.DB(), schema)
 }
 
-func TestNewNoData(t *testing.T) {
+func TestNewModelNoData(t *testing.T) {
 	m := modelx.NewModel[Users]()
 	if m == nil {
 		t.Error("Could not instantiate Modelx")
 	}
 }
 
-func TestNewWithData(t *testing.T) {
+func TestNewModelWithData(t *testing.T) {
 	// type parameter is guessed from the type of the parameters.
 	m := modelx.NewModel(users...)
 	expected := len(users)
@@ -98,7 +98,6 @@ func TestTable(t *testing.T) {
 	} else {
 		t.Logf("Instantited type: %#v\n TableName: %s\n", m, table)
 	}
-
 }
 
 func TestColumns(t *testing.T) {
@@ -107,11 +106,11 @@ func TestColumns(t *testing.T) {
 		data []Users
 	}{
 		{
-			name: `WithData`,
+			name: `ModelxWithData`,
 			data: users,
 		},
 		{
-			name: `NoData`,
+			name: `ModelxNoData`,
 		},
 	}
 	for _, tc := range tests {
@@ -440,6 +439,13 @@ func TestPanics(t *testing.T) {
 			name: `RenderSQLTemplate NoTemplateFound`,
 			fn: func() {
 				modelx.RenderSQLTemplate(`NOSUCH`, map[string]any{})
+			},
+		},
+		{
+			name: `TypeToSnakeCase`,
+			fn: func() {
+				r := new(struct{ ID int16 })
+				modelx.TypeToSnakeCase(r)
 			},
 		},
 	}

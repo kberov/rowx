@@ -44,7 +44,7 @@ var (
 )
 
 type alabala struct {
-	*Rowx[alabala]
+	*Rowx[SqlxRows]
 	ID int32
 }
 
@@ -77,21 +77,30 @@ type SqlxRows interface {
 	//	Get(...any) error
 	// List of columns which make this record unique.
 	PrimaryKeys() []string
-	//	Table()
-	//	Columns()
+	Table() string
+	Columns() []string
 }
 
 /*
 Rowx is the base type for all structs which represent a database row in a
-table. It keeps the metadata retreived from the type it self about table and
-columns' names.
+table. It keeps the metadata (retreived from the type it self) about table and
+columns' names. For any type to implement [SqlxRows], it has to only embed
+[Rowx].
+
+Example:
+
+	type Users struct {
+		*modelx.Rowx[modelx.SqlxRows]
+		LoginName string
+		ID        int32
+	}
 */
-type Rowx[R SqlxRows] struct {
+type Rowx[R any] struct {
 	table   string
 	columns []string
 }
 
-// PrimaryKeys returns a slice of one element {`id`}. The purpose is to have an
+// PrimaryKeys returns a slice of one string element {`id`}. Its purpose is to have an
 // overwritable default for types, which embed Rowx[R].
 func (r *Rowx[R]) PrimaryKeys() []string {
 	return []string{`id`}
@@ -102,7 +111,7 @@ func (r *Rowx[R]) Table() string {
 	if r.table != "" {
 		return r.table
 	}
-	r.table = TypeToSnakeCase(new(R))
+	r.table = TypeToSnakeCase(r)
 	return r.table
 }
 
@@ -114,7 +123,7 @@ func (r *Rowx[R]) Columns() []string {
 	if len(r.columns) > 0 {
 		return r.columns
 	}
-	r.columns = columns[R]()
+	r.columns = columns(r)
 	return r.columns
 }
 
@@ -238,10 +247,8 @@ type Modelx[R SqlxRows] struct {
 // NewModel returns a new instance of a table model with optionally provided
 // data rows as a variadic parameter.
 func NewModel[R SqlxRows](rows ...R) SqlxModel[R] {
-	if rows != nil {
-		return &Modelx[R]{data: rows}
-	}
-	return &Modelx[R]{}
+	r := new(Rowx[R])
+	return &Modelx[R]{data: rows, columns: r.Columns(), table: r.Table()}
 }
 
 // Table returns the guessed table name from the type parameter.
@@ -254,7 +261,7 @@ func (m *Modelx[R]) Table() string {
 }
 
 // Data returns the slice of structs, passed to [NewModel]. It may return nil
-// if no rows are passed.
+// if no rows were passed to [NewModel].
 func (m *Modelx[R]) Data() []R {
 	return m.data
 }
@@ -267,11 +274,11 @@ func (m *Modelx[R]) Columns() []string {
 	if len(m.columns) > 0 {
 		return m.columns
 	}
-	m.columns = columns[R]()
+	m.columns = columns(new(R))
 	return m.columns
 }
 
-func columns[R SqlxRows]() []string {
+func columns[R any](r R) []string {
 	/*
 		TODO: Some day... use go:generate to move such code to compile time for
 		SqlxRows implementing types. Consider also a solution to (eventually
@@ -301,7 +308,7 @@ func columns[R SqlxRows]() []string {
 		https://stackoverflow.com/questions/55934210/creating-structs-programmatically-at-runtime-possible
 		https://agirlamonggeeks.com/golang-dynamic-lly-generate-struct/
 	*/
-	colMap := DB().Mapper.TypeMap(reflect.ValueOf(new(R)).Type()).Names
+	colMap := DB().Mapper.TypeMap(reflect.ValueOf(r).Type()).Names
 	columns := make([]string, 0, len(colMap))
 	for k := range colMap {
 		if strings.Contains(k, `.`) {
