@@ -1,14 +1,16 @@
 /*
 Package modelx provides interfaces and a generic data type, implementing the
-interfaces to work easily with database records and sets of records. Underneath
+interfaces to work easily with sets of database records. Underneath
 [sqlx] is used. Package modelx provides just an object mapper. The relations'
 constraints are left to be managed by the database and you. If you embed
 (extend) the data type [Modelx], you get automatically the respective
 implementation and can overwrite methods to customise them for your needs.
+Obviously, if you embed Modelx you, must use your own constructor or even
+simply `new(YourTableName)`...
 
 Caveat: The current implementation naively assumes that the primary key name is
 `ID`. Of course the primary key can be more than one column and with arbitrary
-name. For now just use [sqlx] for such tables.
+name. For now just use [sqlx] for such tables. TODO: FIXME
 */
 package modelx
 
@@ -21,13 +23,12 @@ import (
 	"strings"
 
 	"github.com/jmoiron/sqlx"
-	"github.com/jmoiron/sqlx/reflectx"
 	"github.com/labstack/gommon/log"
 )
 
 var (
 	// DefaultLogHeader is a template for modelx logging
-	DefaultLogHeader = `${prefix}:${time_rfc3339}:${level}:${short_file}:${line}`
+	DefaultLogHeader = `${prefix}:${level}:${short_file}:${line}`
 	// DefaultLimit is the default LIMIT for SQL queries.
 	DefaultLimit = 100
 	// DriverName is the name of the database engine to use.
@@ -41,11 +42,11 @@ var (
 	singleDB *sqlx.DB
 	sprintf  = fmt.Sprintf
 	// Make sure that Modelx implements the full SqlxModel interface.
-	_ SqlxModel[alabala] = (*Modelx[alabala])(nil)
+	_ SqlxModel[SqlxRows] = (*alabala)(nil)
 )
 
 type alabala struct {
-	*Rowx[SqlxRows]
+	*Modelx[SqlxRows]
 	ID int32
 }
 
@@ -71,62 +72,10 @@ func DB() *sqlx.DB {
 }
 
 /*
-SqlxRows is an interface and generic constraint for database records.
+SqlxRows is an empty interface and generic constraint for database records.
+Any struct type implements it.
 */
 type SqlxRows interface {
-	// Select one record from its table.
-	//	Get(...any) error
-	// List of columns which make this record unique.
-	PrimaryKeys() []string
-	Table() string
-	Columns() []string
-}
-
-/*
-Rowx is the base type for all structs which represent a database row in a
-table. It keeps the metadata (retreived from the type it self) about table and
-columns' names. For any type to implement [SqlxRows], it has to only embed
-[Rowx].
-
-Example:
-
-	type Users struct {
-		*modelx.Rowx[modelx.SqlxRows]
-		LoginName string
-		ID        int32
-	}
-*/
-type Rowx[R any] struct {
-	colMap  *reflectx.Mapper
-	table   string
-	columns []string
-}
-
-// PrimaryKeys returns a slice of one string element {`id`}. Its purpose is to have an
-// overwritable default for types, which embed Rowx[R].
-func (r *Rowx[R]) PrimaryKeys() []string {
-	return []string{`id`}
-}
-
-// Table returns the guessed table name from the type parameter of the record.
-func (r *Rowx[R]) Table() string {
-	if r.table != "" {
-		return r.table
-	}
-	r.table = TypeToSnakeCase(r)
-	return r.table
-}
-
-/*
-Columns returns a slice with the names of the table's columns in no particular
-order.
-*/
-func (r *Rowx[R]) Columns() []string {
-	if len(r.columns) > 0 {
-		return r.columns
-	}
-	r.columns = columns(r)
-	return r.columns
 }
 
 /*
@@ -246,14 +195,17 @@ type Modelx[R SqlxRows] struct {
 	columns []string
 }
 
-// NewModelx returns a new instance of a table model with optionally provided
-// data rows as a variadic parameter.
+/*
+NewModelx returns a new instance of a table model with optionally provided data
+rows as a variadic parameter. Providing the specific type parameter to
+instantiate is mandatory.
+*/
 func NewModelx[R SqlxRows](rows ...R) SqlxModel[R] {
-	r := new(Rowx[R])
-	return &Modelx[R]{data: rows, columns: r.Columns(), table: r.Table()}
+	r := new(R)
+	return &Modelx[R]{data: rows, table: TypeToSnakeCase(r), columns: columns(r)}
 }
 
-// Table returns the guessed table name from the type parameter.
+// Table returns the guessed table name from the generic type parameter.
 func (m *Modelx[R]) Table() string {
 	if m.table != "" {
 		return m.table
@@ -262,10 +214,22 @@ func (m *Modelx[R]) Table() string {
 	return m.table
 }
 
-// Data returns the slice of structs, passed to [NewModelx]. It may return nil
-// if no rows were passed to [NewModelx].
+/*
+Data returns the slice of structs, passed to [NewModelx]. It may return nil
+if no rows were passed to [NewModelx].
+*/
 func (m *Modelx[R]) Data() []R {
 	return m.data
+}
+
+/*
+SetData sets a slice of R to be inserted or updated in the database. Please
+note, that the embedding type must have its own private field `data` if you use
+it self instead of `NewModelx[YourTable](data...)` directly. See
+[modelx_test.TestTryEmbed] for example.
+*/
+func (m *Modelx[R]) SetData(data []R) {
+	m.data = data
 }
 
 /*
@@ -333,7 +297,6 @@ directly some of the [sqlx] functionnalities.
 */
 func (m *Modelx[R]) Insert() (sql.Result, error) {
 	dataLen := len(m.data)
-	// Logger.Debugf("Data: %#v", m.data)
 	if dataLen == 0 {
 		Logger.Panic("Cannot insert, when no data is provided!")
 	}
@@ -435,10 +398,23 @@ func (m *Modelx[R]) Select(where string, bindData any, limitAndOffset ...int) ([
 	return m.data, nil
 }
 
+// Get is only a wrapper for [Modelx.Select], that sets the limit to 1 and
+// returns the first element from collected [Modelx.Data].
+func (m *Modelx[R]) Get(where string, bindData any) (R, error) {
+	_, err := m.Select(where, bindData, 1, 0)
+	return m.data[0], err
+}
+
 /*
 Update constructs a Named UPDATE query and executes it. We assume that the bind
 data parameter for [sqlx.DB.NamedExec] is each element of the slice of passed
 SqlxRows to [NewModelx].
+
+This is somehow problematic. What if we want to `SET group_id=1 WHERE
+group_id=2. How to bind it only with the data from the record. Not possible.
+We need additional bind parameter. Something like where_group_id to hold the
+current value. Or maybe use a nested select statement in the WHERE clause to
+match the needed row for update.
 
 `fields` is the list of columns to be updated - used in `SET col = :col...`. If
 a field starts with UppercaseLetter it is converted to snake_case.
@@ -462,7 +438,7 @@ func (m *Modelx[R]) Update(fields []string, where string) (sql.Result, error) {
 		`WHERE`: where,
 	}
 	query := RenderSQLTemplate(`UPDATE`, stash)
-	Logger.Debugf("Rendered query : %s", query)
+	Logger.Debugf("Rendered query : %s;", query)
 	stmt, e := tx.PrepareNamed(query)
 	if e != nil {
 		return nil, e

@@ -3,12 +3,14 @@ package modelx_test
 import (
 	"database/sql"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/kberov/rowx/modelx"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/stretchr/testify/require"
 )
 
 var schema = `
@@ -24,8 +26,8 @@ name VARCHAR(100) UNIQUE NOT NULL,
 changed_by INTEGER DEFAULT NULL REFERENCES users(id) ON DELETE SET DEFAULT);
 INSERT INTO groups(id,name, changed_by) VALUES (0,'superadmin',1);
 INSERT INTO groups(id,name, changed_by) VALUES (1,'admins',1);
-INSERT INTO groups(id,name, changed_by) VALUES (2,'editors',1);
-INSERT INTO groups(id,name, changed_by) VALUES (3,'guests',1);
+INSERT INTO groups(id,name, changed_by) VALUES (2,'guests',1);
+INSERT INTO groups(id,name, changed_by) VALUES (3,'editors',1);
 INSERT INTO groups(id,name, changed_by) VALUES (4,'commenters',1);
 CREATE TABLE user_group (
 --  'ID of the user belonging to the group with group_id.'
@@ -33,12 +35,11 @@ CREATE TABLE user_group (
 --  'ID of the group to which the user with user_id belongs.'
   group_id INTEGER REFERENCES groups(id) ON DELETE CASCADE,
   PRIMARY KEY(user_id, group_id)
-)
+);
 PRAGMA foreign_keys = ON;
 `
 
 type Users struct {
-	*modelx.Rowx[modelx.SqlxRows]
 	LoginName string
 	GroupID   sql.NullInt32
 	ChangedBy sql.NullInt32
@@ -52,7 +53,6 @@ var users = []Users{
 }
 
 type Groups struct {
-	*modelx.Rowx[modelx.SqlxRows]
 	Name      string
 	ChangedBy sql.NullInt32
 	ID        int32
@@ -78,6 +78,66 @@ func init() {
 	multiExec(modelx.DB(), schema)
 }
 
+type UserGroup struct {
+	modelx.Modelx[UserGroup]
+	data    []UserGroup
+	UserID  int32
+	GroupID int32
+}
+
+func TestTryEmbed(t *testing.T) {
+	ug := new(UserGroup)
+	require.Equal(t, `user_group`, ug.Table())
+	expectedCols := []string{`user_id`, `group_id`}
+	slices.Sort(expectedCols)
+	slices.Sort(ug.Columns())
+	require.Equal(t, expectedCols, ug.Columns())
+	// Insert some users (the usual way) to meet the foreign key constraint.
+	rs, err := modelx.NewModelx[Users](users...).Insert()
+	require.NoError(t, err)
+	rows, errAff := rs.LastInsertId()
+	require.NoError(t, errAff)
+	require.Equal(t, int64(3), rows)
+	ugDataIns := []UserGroup{
+		UserGroup{UserID: 1, GroupID: 0},
+		UserGroup{UserID: 1, GroupID: 1},
+		UserGroup{UserID: 2, GroupID: 2},
+		UserGroup{UserID: 3, GroupID: 3},
+		UserGroup{UserID: 1, GroupID: 4},
+		UserGroup{UserID: 2, GroupID: 4},
+		UserGroup{UserID: 3, GroupID: 4},
+	}
+	ug.SetData(ugDataIns)
+	rs, err = ug.Insert()
+	require.NoError(t, err)
+	rows, errAff = rs.LastInsertId()
+	require.NoError(t, errAff)
+	require.Equal(t, int64(7), rows)
+	// Update some rows - move some user(3) to another group(2).
+	ugDataUpd := []UserGroup{
+		UserGroup{UserID: 3, GroupID: 2},
+	}
+	ug.SetData(ugDataUpd)
+	// TODO: Think how to pass to sqlx tx.Exec(dataRow). Specifically how to add bindData for the where clause???
+	rs, err = ug.Update([]string{`group_id`}, `WHERE user_id=:user_id AND group_id=4`)
+	require.NoError(t, err)
+	rows, errAff = rs.RowsAffected()
+	require.NoError(t, errAff)
+	require.Equal(t, int64(1), rows)
+	// Get the row to see what we did.
+	row, _ := ug.Get(`WHERE user_id = :uid AND group_id = :gid`, map[string]any{`uid`: 3, `gid`: 2})
+	t.Logf("Get updated row: %d|%d", row.UserID, row.GroupID)
+	// Delete the inserted users, so the next tests pass and see if "ON DELETE
+	// CASCADE" worked in the database. Also reset the sequence for
+	// AUTOINCREMENT fro table users.
+	rs, err = modelx.NewModelx[Users]().Delete(`WHERE id>=:id`, map[string]any{`id`: 0})
+	require.NoError(t, err)
+	rows, errAff = rs.RowsAffected()
+	require.NoError(t, errAff)
+	require.Equal(t, int64(3), rows)
+	modelx.DB().MustExec(`UPDATE sqlite_sequence SET seq = 0 WHERE name = 'users'`)
+}
+
 func TestNewModelNoData(t *testing.T) {
 	m := modelx.NewModelx[Users]()
 	if m == nil {
@@ -96,7 +156,7 @@ func TestNewModelWithData(t *testing.T) {
 
 func TestTable(t *testing.T) {
 	type AVeryLongAndComplexTableName struct {
-		*modelx.Rowx[modelx.SqlxRows]
+		ID int32
 	}
 	m := &modelx.Modelx[AVeryLongAndComplexTableName]{}
 	if table := m.Table(); table != `a_very_long_and_complex_table_name` {
@@ -399,7 +459,7 @@ func (m *myModel[R]) mySelect() ([]R, error) {
 	err := modelx.DB().Select(&m.data, `SELECT * from groups limit 100`)
 	return m.data, err
 }
-func TestEmbed(t *testing.T) {
+func TestWrap(t *testing.T) {
 	// ---
 	mm := &myModel[Groups]{}
 	if mm.Table() != `groups` {
