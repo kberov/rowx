@@ -502,6 +502,13 @@ func TestPanics(t *testing.T) {
 			},
 		},
 		{
+			name: `UpfateNoData`,
+			fn: func() {
+				g := modelx.NewModelx[Groups]()
+				_, _ = g.Update(g.Columns(), `WHERE 1`)
+			},
+		},
+		{
 			name: `RenderSQLTemplate NoTemplateFound`,
 			fn: func() {
 				modelx.RenderSQLTemplate(`NOSUCH`, map[string]any{})

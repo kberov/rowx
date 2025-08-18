@@ -121,6 +121,7 @@ automatically its implementation and override some of its methods.
 type SqlxModelSelector[R SqlxRows] interface {
 	Table() string
 	Columns() []string
+	Get(string, any) (R, error)
 	Select(string, any, ...int) ([]R, error)
 }
 
@@ -152,7 +153,7 @@ Direct usage:
 		Users{LoginName: "the_third"},
 	}
 
-	m := modelx.NewModel[Users](users)
+	m := modelx.NewModelx[Users](users)
 	r, e := m.Insert()
 	if e != nil {
 		fmt.Fprintf(os.Stderr, "Got error from m.Insert(): %s", e.Error())
@@ -161,37 +162,32 @@ Direct usage:
 
 To embed this type, write something similar to the following:
 
-	// MyModel requires that the records implement the SQLxRows interface.
-	type MyModel[R SQLxRows] struct {
-		modelx.Modelx[R]
-		data []R
-	}
-	// Data returns the collected data from a Select or provided objects.
-	func (m *MyModel[R]) Data() []R {
-		return m.data
+	type MyTableName struct {
+		modelx.Modelx[MyTableName]
+		data []MyTableName
 	}
 	// Now you can implement some custom methods to insert, select, update and
 	// delete your sets of records. Maybe some custom constructor.
 	//...
-	// Somewhere else in the code, using your class...
-	mm = new(myModel[Users])
+	// Somewhere else in the code, using it...
+	mm = new(MyTableName)
 	// WHERE clause can be as complex as you need.
 	data, err := mm.Select(`WHERE id >:id`, map[string]any{`id`: 1}.
 	// And you can implement your own Columns() and Table()...
 */
 type Modelx[R SqlxRows] struct {
 	/*
-		'.data' is a slice of rows, retrieved from the database or to be inserted,
+		data is a slice of rows, retrieved from the database or to be inserted,
 		or updated.
 	*/
 	data []R
 	/*
-		'.table' allows to set explicitly the table name for this model. Otherwise
+		table allows to set explicitly the table name for this model. Otherwise
 		it is guessed and set from the type of the first element of Data slice
 		upon first use of '.Table()'.
 	*/
 	table string
-	// '.columns' of the table are populated upon first use of '.Columns()'.
+	// columns of the table are populated upon first use of '.Columns()'.
 	columns []string
 }
 
@@ -224,8 +220,8 @@ func (m *Modelx[R]) Data() []R {
 
 /*
 SetData sets a slice of R to be inserted or updated in the database. Please
-note, that the embedding type must have its own private field `data` if you use
-it self instead of `NewModelx[YourTable](data...)` directly. See
+note, that the embedding type must have its own private field `data` if you
+embed `NewModelx[YourTable]` instead using it directly. See
 [modelx_test.TestTryEmbed] for example.
 */
 func (m *Modelx[R]) SetData(data []R) {
@@ -286,12 +282,11 @@ func columns[R any](r R) []string {
 }
 
 /*
-Insert inserts a set of SqlxRows instances (without their ID values) and returns
-[sql.Result] and [error]. The value for the ID column is left to be set by the
-database. If the records to be inserted are more than one, the data is inserted
-in a transaction. If there are no records to be inserted, it panics. If
-[QueryTemplates][`INSERT`] is not found, it panics.
-
+Insert inserts a set of SqlxRows instances (without their ID values) and
+returns [sql.Result] and [error]. The value for the autoincremented primary key
+(usually ID column) is left to be set by the database. If the records to be
+inserted are more than one, the data is inserted in a transaction. If there are
+no records to be inserted, it panics.
 If you need to insert an SqlxRows structure with a specific value for ID, use
 directly some of the [sqlx] functionnalities.
 */
@@ -406,9 +401,11 @@ func (m *Modelx[R]) Get(where string, bindData any) (R, error) {
 }
 
 /*
-Update constructs a Named UPDATE query and executes it. We assume that the bind
-data parameter for [sqlx.DB.NamedExec] is each element of the slice of passed
-SqlxRows to [NewModelx].
+Update constructs a Named UPDATE query and executes it for each row of data in
+a transaction. It panics if there is no data to be updated.
+
+We assume that the bind data parameter for [sqlx.DB.NamedExec] is each element
+of the slice of passed SqlxRows to [NewModelx] or to [Modelx.SetData].
 
 This is somehow problematic. What if we want to `SET group_id=1 WHERE
 group_id=2. How to bind it only with the data from the record. Not possible.
@@ -422,6 +419,9 @@ a field starts with UppercaseLetter it is converted to snake_case.
 For any case in which this method is not suitable, use directly sqlx.
 */
 func (m *Modelx[R]) Update(fields []string, where string) (sql.Result, error) {
+	if len(m.data) == 0 {
+		Logger.Panic("Cannot update, when no data is provided!")
+	}
 	var (
 		tx *sqlx.Tx
 		r  sql.Result
