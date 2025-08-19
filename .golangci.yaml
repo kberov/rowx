@@ -12,28 +12,9 @@ linters:
       enable-all: true
       disable:
         - composites
-        # this can be usefull to enable
+        # this can be usefull to enable from time to time
         # https://medium.com/@sebassegros/golang-dealing-with-maligned-structs-9b77bacf4b97
         # https://en.wikipedia.org/wiki/Data_structure_alignment
         # https://go.dev/src/go/types/sizes.go
-        #- fieldalignment
+        - fieldalignment
 
-#  # See the dedicated "linters" documentation section.
-#  option: value
-#formatters:
-#  # See the dedicated "formatters" documentation section.
-#  option: value
-#issues:
-#  # See the dedicated "issues" documentation section.
-#  option: value
-## Output configuration options.
-#output:
-#  # See the dedicated "output" documentation section.
-#  option: value
-## Options for analysis running.
-#run:
-#  # See the dedicated "run" documentation section.
-#  option: value
-#severity:
-#  # See the dedicated "severity" documentation section.
-#  option: value

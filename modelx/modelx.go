@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/jmoiron/sqlx"
+	"github.com/jmoiron/sqlx/reflectx"
 	"github.com/labstack/gommon/log"
 )
 
@@ -38,7 +39,10 @@ var (
 	// Logger is instantiated (if not instantiated already externally) during
 	// first call of DB() and the log level is set to log.DEBUG.
 	Logger *log.Logger
-	// singleDB is a singleton connection to the database.
+	// ReflectXTag sets the tag name for identifying tags, read and acted upon
+	// by sqlx and rowx.
+	ReflectXTag = `rx`
+	// singleDB is a singleton for the connection pool to the database.
 	singleDB *sqlx.DB
 	sprintf  = fmt.Sprintf
 	// Make sure that Modelx implements the full SqlxModel interface.
@@ -67,7 +71,7 @@ func DB() *sqlx.DB {
 	Logger.Debugf("Connecting to database '%s'...", DSN)
 
 	singleDB = sqlx.MustConnect(DriverName, DSN)
-	singleDB.MapperFunc(CamelToSnakeCase)
+	singleDB.Mapper = reflectx.NewMapperFunc(ReflectXTag, CamelToSnakeCase)
 	return singleDB
 }
 
@@ -121,7 +125,8 @@ automatically its implementation and override some of its methods.
 type SqlxModelSelector[R SqlxRows] interface {
 	Table() string
 	Columns() []string
-	Get(string, any) (R, error)
+	Data() []R
+	Get(string, any) (*R, error)
 	Select(string, any, ...int) ([]R, error)
 }
 
@@ -271,7 +276,20 @@ func columns[R any](r R) []string {
 	*/
 	colMap := DB().Mapper.TypeMap(reflect.ValueOf(r).Type()).Names
 	columns := make([]string, 0, len(colMap))
-	for k := range colMap {
+	// TODO: Move this mapping to a private method. Put in it all the mappings
+	// that we do (columns, autoincr, index etc options). Move it to the
+	// constructor to be done as early as possible and not as late as possible.
+	// If an Modelx object persists longer than a web request (Why not?), this
+	// should speed up the execution because all this reflection thing will be
+	// done once.
+	for k, v := range colMap {
+		// Logger.Debugf("column: %s, Name: %v; Tag: %#v; Options: %#v; Path: %v", k, v.Field.Name, v.Field.Tag, v.Options, v.Path)
+		if oVal, exists := v.Options[`no_col`]; exists {
+			if yes, _ := strconv.ParseBool(oVal); yes {
+				Logger.Debugf("Skipping field %s; Options %v", v.Field.Name, v.Options)
+				continue
+			}
+		}
 		if strings.Contains(k, `.`) {
 			continue
 		}
@@ -329,15 +347,35 @@ func (m *Modelx[R]) Insert() (sql.Result, error) {
 	return DB().NamedExec(query, m.data[0])
 }
 
+/*
+AutoFields looks for fields annotated with tag `rowx:"column_name,auto"` and
+returns them. Finally if there is a field with the name `ID`, it is used as the
+only element in the list to be returned. It assumes that such fields do not
+have to be inserted and are managed by the database. These are autoincremented
+primary keys, fields, filled with data after insert or before update by a
+trigger, etc (https://sqlite.org/lang_createtrigger.html). Returns a list of
+such columns. If you want to avoid these actions, you will have to override
+this method for your type or set of types and hardcode the fields or return an
+empty slice. This method is used in [Modelx.Insert] to avoid inserting default
+values from Go.
+*/
+func (m *Modelx[R]) AutoFields() []string {
+	return []string{`id`}
+}
+
 // colsWithoutID retrurns a new slice, which does not contain the 'id' element.
 func (m *Modelx[R]) colsWithoutID() []string {
 	cols := m.Columns()
 	placeholdersForInsert := make([]string, 0, len(cols)-1)
+	prims := m.AutoFields()
+COLS:
 	for _, v := range cols {
 		//FIXME: implement PrimaryKey() method, returning a list of column names used
 		//together as a primary key constraint.
-		if v == "id" {
-			continue
+		for _, k := range prims {
+			if v == k {
+				continue COLS
+			}
 		}
 		placeholdersForInsert = append(placeholdersForInsert, v)
 	}
@@ -361,29 +399,17 @@ func (m *Modelx[R]) Select(where string, bindData any, limitAndOffset ...int) ([
 	if bindData == nil {
 		bindData = struct{}{}
 	}
-	stash := map[string]any{
-		`columns`: strings.Join(m.Columns(), ","),
-		`table`:   m.Table(),
-		`WHERE`:   where,
-		`limit`:   strconv.Itoa(limitAndOffset[0]),
-		`offset`:  strconv.Itoa(limitAndOffset[1]),
-	}
-	query := RenderSQLTemplate(`SELECT`, stash)
-	Logger.Debugf("Rendered query : %s", query)
-	m.data = make([]R, 0, limitAndOffset[0])
+	query := m.renderSelectTemplate(where, limitAndOffset)
+	Logger.Debugf("Rendered Select query : %s", query)
+	m.data = make([]R, 1, limitAndOffset[0])
 
-	q, args, err := sqlx.Named(query, bindData)
+	q, args, err := namedInRebind(query, bindData)
 	if err != nil {
 		return nil, err
 	}
-	q, args, err = sqlx.In(q, args...)
-	if err != nil {
-		return nil, err
-	}
-	q = DB().Rebind(q)
 	if err := DB().Select(&m.data, q, args...); err != nil {
 		Logger.Debugf("Select q :'%s', args:'%#v', err:'%#v'", query, args, err)
-		return nil, err
+		return m.data, err
 	}
 	//	if stmt, err := DB().PrepareNamed(query); err != nil {
 	//		return nil, fmt.Errorf("error from DB().PrepareNamed(SQL): %w", err)
@@ -393,28 +419,68 @@ func (m *Modelx[R]) Select(where string, bindData any, limitAndOffset ...int) ([
 	return m.data, nil
 }
 
-// Get is only a wrapper for [Modelx.Select], that sets the limit to 1 and
-// returns the first element from collected [Modelx.Data].
-func (m *Modelx[R]) Get(where string, bindData any) (R, error) {
-	_, err := m.Select(where, bindData, 1, 0)
-	return m.data[0], err
+func (m *Modelx[R]) renderSelectTemplate(where string, limitAndOffset []int) string {
+	stash := map[string]any{
+		`columns`: strings.Join(m.Columns(), ","),
+		`table`:   m.Table(),
+		`WHERE`:   where,
+		`limit`:   strconv.Itoa(limitAndOffset[0]),
+		`offset`:  strconv.Itoa(limitAndOffset[1]),
+	}
+	query := RenderSQLTemplate(`SELECT`, stash)
+	Logger.Debugf("Rendered SELECT query : %s", query)
+	return query
 }
 
 /*
-Update constructs a Named UPDATE query and executes it for each row of data in
-a transaction. It panics if there is no data to be updated.
+Get executes [sqlx.DB.Get] and returns the result scanned into an instantiated
+[SqlxRows] object or an error.
+*/
+func (m *Modelx[R]) Get(where string, bindData any) (*R, error) {
+	row := new(R)
+	query := m.renderSelectTemplate(where, []int{1, 0})
+	q, args, err := namedInRebind(query, bindData)
+	if err != nil {
+		return row, err
+	}
+	return row, DB().Get(row, q, args...)
+}
 
-We assume that the bind data parameter for [sqlx.DB.NamedExec] is each element
-of the slice of passed SqlxRows to [NewModelx] or to [Modelx.SetData].
+func namedInRebind(query string, bindData any) (string, []any, error) {
+	q, args, err := sqlx.Named(query, bindData)
+	if err != nil {
+		return query, args, err
+	}
+	q, args, err = sqlx.In(q, args...)
+	if err != nil {
+		return query, args, err
+	}
+	q = DB().Rebind(q)
+	return q, args, err
+}
 
-This is somehow problematic. What if we want to `SET group_id=1 WHERE
-group_id=2. How to bind it only with the data from the record. Not possible.
-We need additional bind parameter. Something like where_group_id to hold the
-current value. Or maybe use a nested select statement in the WHERE clause to
-match the needed row for update.
+/*
+Update constructs a Named UPDATE query, prepares it and executes it for each
+row of data in a transaction. It panics if there is no data to be updated.
 
-`fields` is the list of columns to be updated - used in `SET col = :col...`. If
-a field starts with UppercaseLetter it is converted to snake_case.
+We pass as bind parameters for each [sqlx.NamedStmt.Exec] each element
+of the slice of passed [SqlxRows] to [NewModelx] or to [Modelx.SetData].
+
+This is somehow problematic with named queries. What if we want to `SET
+group_id=1 WHERE group_id=2. How to differntiate between columns to be updated
+and parameters for the WHERE clause?  We need differned name for the bind
+parameter. Something like `:where.group_id` to hold the existing value in the
+database. Or maybe use a nested select statement in the WHERE clause to match
+the needed row for update by primary key column. A solution is to have a nested
+structure in the passed record, used only as parameters for the query.
+We can enrich our structure, representing the database record with a `Where`
+field which is a structure and holds the current values. Look in the tests for
+an example of supdating such an enriched record. Also we can use for our
+columns types like [sql.NullInt32] and such, provided by the [sql] package.
+
+`fields` is the list of columns to be updated - used to construct the `SET col
+= :col...` part of the query. If a field starts with UppercaseLetter it is
+converted to snake_case.
 
 For any case in which this method is not suitable, use directly sqlx.
 */
@@ -433,18 +499,19 @@ func (m *Modelx[R]) Update(fields []string, where string) (sql.Result, error) {
 
 	stash := map[string]any{
 		`table`: m.Table(),
-		// Do not update ID in any case.
+		// TODO: Prevent updating AutoFields in any case.
 		`SET`:   SQLForSET(fields),
 		`WHERE`: where,
 	}
 	query := RenderSQLTemplate(`UPDATE`, stash)
-	Logger.Debugf("Rendered query : %s;", query)
-	stmt, e := tx.PrepareNamed(query)
+	Logger.Debugf("Rendered UPDATE query : %s;", query)
+	namedStmt, e := tx.PrepareNamed(query)
 	if e != nil {
 		return nil, e
 	}
 	for _, row := range m.data {
-		r, e = stmt.Exec(row)
+		Logger.Debugf("Update row: %+v;", row)
+		r, e = namedStmt.Exec(row)
 		if e != nil {
 			return r, e
 		}

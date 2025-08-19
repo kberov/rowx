@@ -43,7 +43,7 @@ type Users struct {
 	LoginName string
 	GroupID   sql.NullInt32
 	ChangedBy sql.NullInt32
-	ID        int32
+	ID        int32 `rx:"id,auto"`
 }
 
 var users = []Users{
@@ -55,7 +55,7 @@ var users = []Users{
 type Groups struct {
 	Name      string
 	ChangedBy sql.NullInt32
-	ID        int32
+	ID        int32 `rx:"id,auto"`
 }
 
 // Stollen from sqlx_test.go
@@ -83,21 +83,26 @@ type UserGroup struct {
 	data    []UserGroup
 	UserID  int32
 	GroupID int32
+	// Used only as bind parameters during UPDATE and maybe other queries. Must
+	// be a named struct, known at compile time!
+	Where whereParams `rx:"where,no_col=1"`
 }
+type whereParams struct{ GroupID int32 }
 
 func TestTryEmbed(t *testing.T) {
+	reQ := require.New(t)
 	ug := new(UserGroup)
-	require.Equal(t, `user_group`, ug.Table())
+	reQ.Equal(`user_group`, ug.Table())
 	expectedCols := []string{`user_id`, `group_id`}
 	slices.Sort(expectedCols)
 	slices.Sort(ug.Columns())
-	require.Equal(t, expectedCols, ug.Columns())
+	reQ.Equal(expectedCols, ug.Columns())
 	// Insert some users (the usual way) to meet the foreign key constraint.
 	rs, err := modelx.NewModelx[Users](users...).Insert()
-	require.NoError(t, err)
+	reQ.NoError(err)
 	rows, errAff := rs.LastInsertId()
-	require.NoError(t, errAff)
-	require.Equal(t, int64(3), rows)
+	reQ.NoError(errAff)
+	reQ.Equal(int64(3), rows)
 	ugDataIns := []UserGroup{
 		UserGroup{UserID: 1, GroupID: 0},
 		UserGroup{UserID: 1, GroupID: 1},
@@ -109,32 +114,44 @@ func TestTryEmbed(t *testing.T) {
 	}
 	ug.SetData(ugDataIns)
 	rs, err = ug.Insert()
-	require.NoError(t, err)
+	reQ.NoError(err)
 	rows, errAff = rs.LastInsertId()
-	require.NoError(t, errAff)
-	require.Equal(t, int64(7), rows)
+	reQ.NoError(errAff)
+	reQ.Equal(int64(7), rows)
 	// Update some rows - move some user(3) to another group(2).
 	ugDataUpd := []UserGroup{
-		UserGroup{UserID: 3, GroupID: 2},
+		UserGroup{
+			UserID: 3,
+			// new (to be updated in the database) value: 2
+			GroupID: 2, Where: whereParams{
+				// existing in the database value: 4
+				GroupID: 4,
+			},
+		},
 	}
 	ug.SetData(ugDataUpd)
-	// TODO: Think how to pass to sqlx tx.Exec(dataRow). Specifically how to add bindData for the where clause???
-	rs, err = ug.Update([]string{`group_id`}, `WHERE user_id=:user_id AND group_id=4`)
-	require.NoError(t, err)
+	//                     set columns           WHERE struct
+	rs, err = ug.Update([]string{`group_id`}, `WHERE user_id=:user_id AND group_id=:where.group_id`)
+	reQ.NoError(err)
 	rows, errAff = rs.RowsAffected()
-	require.NoError(t, errAff)
-	require.Equal(t, int64(1), rows)
+	reQ.NoError(errAff)
+	reQ.Equal(int64(1), rows)
 	// Get the row to see what we did.
-	row, _ := ug.Get(`WHERE user_id = :uid AND group_id = :gid`, map[string]any{`uid`: 3, `gid`: 2})
+	row, err := ug.Get(
+		`WHERE user_id = :uid AND group_id = :gid`,
+		map[string]any{`uid`: 3, `gid`: ug.Data()[0].Where.GroupID})
+	if err != nil {
+		t.Logf(`err: %s`, err.Error())
+	}
 	t.Logf("Get updated row: %d|%d", row.UserID, row.GroupID)
 	// Delete the inserted users, so the next tests pass and see if "ON DELETE
 	// CASCADE" worked in the database. Also reset the sequence for
 	// AUTOINCREMENT fro table users.
 	rs, err = modelx.NewModelx[Users]().Delete(`WHERE id>=:id`, map[string]any{`id`: 0})
-	require.NoError(t, err)
+	reQ.NoError(err)
 	rows, errAff = rs.RowsAffected()
-	require.NoError(t, errAff)
-	require.Equal(t, int64(3), rows)
+	reQ.NoError(errAff)
+	reQ.Equal(int64(3), rows)
 	modelx.DB().MustExec(`UPDATE sqlite_sequence SET seq = 0 WHERE name = 'users'`)
 }
 
