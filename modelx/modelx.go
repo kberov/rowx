@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -430,8 +431,10 @@ func (m *Modelx[R]) Get(where string, bindData any) (*R, error) {
 	return row, DB().Get(row, q, args...)
 }
 
+var startsWithWhere = regexp.MustCompile(`(?i:^\s*?where)`)
+
 func ifWhere(where string) string {
-	if where != `` {
+	if where != `` && !startsWithWhere.MatchString(where) {
 		where = sprintf(`WHERE %s`, where)
 	}
 	return where

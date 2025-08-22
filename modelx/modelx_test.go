@@ -3,6 +3,7 @@ package modelx_test
 import (
 	"database/sql"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -504,7 +505,9 @@ func TestWrap(t *testing.T) {
 	)
 	_, err = foo.Insert()
 	reQ.NoError(err)
-	firstFoo, err := foo.Get(`bar =1`, nil)
+	// Using the keyword WHERE is optional and can be written even if only for
+	// expressiveness.
+	firstFoo, err := foo.Get(`WHERE bar=1`, nil)
 	reQ.NoError(err)
 	reQ.Equal(`first record`, firstFoo.Description)
 }
@@ -559,4 +562,21 @@ func expectPanic(t *testing.T, f func()) {
 		}
 	}()
 	f()
+}
+
+var aStr = ` WHERE bar=1`
+
+func Benchmark_stringContainsWhere(b *testing.B) {
+	for b.Loop() {
+		strings.Contains(aStr, strings.ToLower(`where `))
+	}
+}
+
+// but matching with regexp is much more reliable than checking if the string just contains where
+var containsWhere = regexp.MustCompile(`(?i:^\s*?where )`)
+
+func Benchmark_regexpMatchWhere(b *testing.B) {
+	for b.Loop() {
+		containsWhere.MatchString(aStr)
+	}
 }
