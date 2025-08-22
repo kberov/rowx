@@ -173,6 +173,11 @@ To embed this type, write something similar to the following:
 	// And you can implement your own Columns() and Table()...
 */
 type Modelx[R SqlxRows] struct {
+	/*
+		table allows to set explicitly the table name for this model. Otherwise
+		it is guessed and set from the type of the first element of Data slice
+		upon first use of '.Table()'.
+	*/
 	table string
 	// columns of the table are populated upon first use of '.Columns()'.
 	columns []string
@@ -181,11 +186,6 @@ type Modelx[R SqlxRows] struct {
 		or updated.
 	*/
 	data []R
-	/*
-		table allows to set explicitly the table name for this model. Otherwise
-		it is guessed and set from the type of the first element of Data slice
-		upon first use of '.Table()'.
-	*/
 	// structMap is an index of field metadata for the underlying struct R.
 	structMap *reflectx.StructMap
 }
