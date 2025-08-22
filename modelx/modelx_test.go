@@ -36,6 +36,12 @@ CREATE TABLE user_group (
   group_id INTEGER REFERENCES groups(id) ON DELETE CASCADE,
   PRIMARY KEY(user_id, group_id)
 );
+
+CREATE TABLE foo(
+	bar INTEGER PRIMARY KEY AUTOINCREMENT,
+	description VARCHAR(255) NOT NULL DEFAULT ''
+);
+
 PRAGMA foreign_keys = ON;
 `
 
@@ -80,12 +86,11 @@ func init() {
 
 type UserGroup struct {
 	modelx.Modelx[UserGroup]
-	data    []UserGroup
 	UserID  int32
 	GroupID int32
 	// Used only as bind parameters during UPDATE and maybe other queries. Must
 	// be a named struct, known at compile time!
-	Where whereParams `rx:"where,no_col=1"`
+	Where whereParams `rx:"where,-"` // - : Do not treat this field as column.
 }
 type whereParams struct{ GroupID int32 }
 
@@ -477,23 +482,15 @@ func (m *myModel[R]) mySelect() ([]R, error) {
 	return m.data, err
 }
 func TestWrap(t *testing.T) {
+	reQ := require.New(t)
 	// ---
 	mm := &myModel[Groups]{}
-	if mm.Table() != `groups` {
-		t.Errorf(`Wrong table for myModel: %s`, mm.Table())
-	}
-	mm = new(myModel[Groups])
-	if mm.Table() != `groups` {
-		t.Errorf(`Wrong table for myModel: %s`, mm.Table())
-		return
-	}
+	reQ.Equalf(`groups`, mm.Table(), `Wrong table for myModel: %s`, mm.Table())
+
 	data, err := mm.Select(`WHERE id >:id`, modelx.SQLMap{`id`: 1})
-	if err != nil {
-		t.Errorf(`Unexpected error:%#v`, err)
-	}
-	if len(data) != 3 {
-		t.Errorf(`Expected 3 rows from the database but got %d.`, len(data))
-	}
+	reQ.NoError(err, `Unexpected error:%#v`, err)
+	reQ.Equalf(3, len(data), `Expected 3 rows from the database but got %d.`, len(data))
+
 	m := &myModel[Groups]{}
 	data, _ = m.mySelect()
 
@@ -504,6 +501,21 @@ func TestWrap(t *testing.T) {
 		t.Error(`m.Data() and data should point to the same data!`)
 	}
 	t.Logf("Extending object's m.Data(): %#v", m.Data())
+
+	type Foo struct {
+		Foo         uint32 `rx:"bar,auto"`
+		Description string
+	}
+
+	foo := modelx.NewModelx[Foo](
+		Foo{Description: `first record`},
+		Foo{Description: `second record`},
+	)
+	_, err = foo.Insert()
+	reQ.NoError(err)
+	firstFoo, err := foo.Get(`WHERE bar =1`, map[string]any{})
+	reQ.NoError(err)
+	reQ.Equal(`first record`, firstFoo.Description)
 }
 
 func TestPanics(t *testing.T) {
@@ -519,7 +531,7 @@ func TestPanics(t *testing.T) {
 			},
 		},
 		{
-			name: `UpfateNoData`,
+			name: `UpdateNoData`,
 			fn: func() {
 				g := modelx.NewModelx[Groups]()
 				_, _ = g.Update(g.Columns(), `WHERE 1`)

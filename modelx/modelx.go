@@ -1,16 +1,12 @@
 /*
 Package modelx provides interfaces and a generic data type, implementing the
-interfaces to work easily with sets of database records. Underneath
-[sqlx] is used. Package modelx provides just an object mapper. The relations'
-constraints are left to be managed by the database and you. If you embed
-(extend) the data type [Modelx], you get automatically the respective
-implementation and can overwrite methods to customise them for your needs.
-Obviously, if you embed Modelx you, must use your own constructor or even
-simply `new(YourTableName)`...
+interfaces to work easily with sets of database records. Underneath [sqlx] is
+used. Package modelx provides just an object mapper. The relations' constraints
+are left to be managed by the database and you.
 
-Caveat: The current implementation naively assumes that the primary key name is
+By default the current implementation assumes that the primary key name is
 `ID`. Of course the primary key can be more than one column and with arbitrary
-name. For now just use [sqlx] for such tables. TODO: FIXME
+name. You can mark such fields with tags. Read on.
 */
 package modelx
 
@@ -118,15 +114,23 @@ type SqlxModelUpdater[R SqlxRows] interface {
 }
 
 /*
+SqlxModelGetter can be implemented to get one record from the database. It is
+fully implemented by [Modelx]. You can embed (extend) Modelx to get
+automatically its implementation and override some of its methods.
+*/
+type SqlxModelGetter[R SqlxRows] interface {
+	Table() string
+	Columns() []string
+	Get(string, any) (*R, error)
+}
+
+/*
 SqlxModelSelector can be implemented to select records from a table or view. It
 is fully implemented by [Modelx]. You can embed (extend) Modelx to get
 automatically its implementation and override some of its methods.
 */
 type SqlxModelSelector[R SqlxRows] interface {
-	Table() string
-	Columns() []string
-	Data() []R
-	Get(string, any) (*R, error)
+	SqlxModelGetter[R]
 	Select(string, any, ...int) ([]R, error)
 }
 
@@ -181,6 +185,11 @@ To embed this type, write something similar to the following:
 	// And you can implement your own Columns() and Table()...
 */
 type Modelx[R SqlxRows] struct {
+	// An instance of the underlying generict type, kept just for getting
+	// metadata from it.
+	r *R
+	// structMap is an index of field metadata for the underlying struct R.
+	structMap *reflectx.StructMap
 	/*
 		data is a slice of rows, retrieved from the database or to be inserted,
 		or updated.
@@ -202,8 +211,24 @@ rows as a variadic parameter. Providing the specific type parameter to
 instantiate is mandatory.
 */
 func NewModelx[R SqlxRows](rows ...R) SqlxModel[R] {
-	r := new(R)
-	return &Modelx[R]{data: rows, table: TypeToSnakeCase(r), columns: columns(r)}
+	m := &Modelx[R]{data: rows}
+	return m
+}
+
+// rowx returns a (*R)(nil). We use it only for metadata extraction. So we do
+// not need to allocate any memory.
+func (m *Modelx[R]) rowx() *R {
+	return (*R)(nil)
+}
+
+// fieldsMap returns a pointer to [reflectx.structMap] for the generic
+// structure. It is the cornerstone to implement the SqlxModelMeta interface.
+func (m *Modelx[R]) fieldsMap() *reflectx.StructMap {
+	if m.structMap != nil {
+		return m.structMap
+	}
+	m.structMap = DB().Mapper.TypeMap(reflect.ValueOf(m.rowx()).Type())
+	return m.structMap
 }
 
 // Table returns the guessed table name from the generic type parameter.
@@ -211,7 +236,7 @@ func (m *Modelx[R]) Table() string {
 	if m.table != "" {
 		return m.table
 	}
-	m.table = TypeToSnakeCase(new(R))
+	m.table = TypeToSnakeCase(m.rowx())
 	return m.table
 }
 
@@ -240,84 +265,90 @@ func (m *Modelx[R]) Columns() []string {
 	if len(m.columns) > 0 {
 		return m.columns
 	}
-	m.columns = columns(new(R))
-	return m.columns
-}
-
-func columns[R any](r R) []string {
 	/*
-		TODO: Some day... use go:generate to move such code to compile time for
-		SqlxRows implementing types. Consider also a solution to (eventually
-		gradually) regenerate Rowx embedding types and recompile the application
-		due to changes in the database schema. This is how we can implement
-		database migrations starting from the database.
-		1. During development the owner of the user code changes the development
-		database and runs `go generate && go build -ldflags "-s -w" ./...` to
-		(re-)generate types which will embed Rowx. Then recompiles the
-		application.
-		2. Next he/she prepares the sql migration file to be run on the
-		production database. It should not be harmfull if some defined fields in
-		the Rowx embedding types do not have corresponding columns in the
-		database, because they will have sane defaults, thanks to Go default
-		values. Also it will not harm if there are new columns in tables and
-		some types do not have yet the corresponding field. The only problematic
-		case is when a column in the database changes its type or a table is
-		dropped. To cover this case...
-		3. Deployment.
-			a. Dabase migration trough executing the prepared SQL file.
-			b. Disallow requests by showing a static page(Maintenance time -
-			this should take less than a second).
-			b. Imediately deploy the static binary. If it is a CGI application,
-			on the next request the updated binary will run. If it is a running
-			application (a (web-)service), immediately restart the application.
-		Consider carefully!:
-		https://stackoverflow.com/questions/55934210/creating-structs-programmatically-at-runtime-possible
-		https://agirlamonggeeks.com/golang-dynamic-lly-generate-struct/
+	   TODO: Some day... use go:generate to move such code to compile time for
+	   SqlxRows implementing types. Consider also a solution to (eventually
+	   gradually) regenerate Rowx embedding types and recompile the application
+	   due to changes in the database schema. This is how we can implement
+	   database migrations starting from the database.
+	   1. During development the owner of the user code changes the development
+	   database and runs `go generate && go build -ldflags "-s -w" ./...` to
+	   (re-)generate types which will embed Rowx. Then recompiles the
+	   application.
+	   2. Next he/she prepares the sql migration file to be run on the
+	   production database. It should not be harmfull if some defined fields in
+	   the Rowx embedding types do not have corresponding columns in the
+	   database, because they will have sane defaults, thanks to Go default
+	   values. Also it will not harm if there are new columns in tables and
+	   some types do not have yet the corresponding field. The only problematic
+	   case is when a column in the database changes its type or a table is
+	   dropped. To cover this case...
+	    3. Deployment.
+	       a. Dabase migration trough executing the prepared SQL file.
+	       b. Disallow requests by showing a static page(Maintenance time -
+	       this should take less than a second).
+	       b. Imediately deploy the static binary. If it is a CGI application,
+	       on the next request the updated binary will run. If it is a running
+	       application (a (web-)service), immediately restart the application.
+
+	   Consider carefully!:
+	   https://stackoverflow.com/questions/55934210/creating-structs-programmatically-at-runtime-possible
+	   https://agirlamonggeeks.com/golang-dynamic-lly-generate-struct/
 	*/
-	colMap := DB().Mapper.TypeMap(reflect.ValueOf(r).Type()).Names
-	columns := make([]string, 0, len(colMap))
-	// TODO: Move this mapping to a private method. Put in it all the mappings
-	// that we do (columns, autoincr, index etc options). Move it to the
-	// constructor to be done as early as possible and not as late as possible.
-	// If an Modelx object persists longer than a web request (Why not?), this
-	// should speed up the execution because all this reflection thing will be
-	// done once.
+	colMap := m.fieldsMap().Names
+	m.columns = make([]string, 0, len(colMap))
 	for k, v := range colMap {
 		// Logger.Debugf("column: %s, Name: %v; Tag: %#v; Options: %#v; Path: %v", k, v.Field.Name, v.Field.Tag, v.Options, v.Path)
-		if oVal, exists := v.Options[`no_col`]; exists {
-			if yes, _ := strconv.ParseBool(oVal); yes {
-				Logger.Debugf("Skipping field %s; Options %v", v.Field.Name, v.Options)
-				continue
-			}
+		if _, exists := v.Options[`-`]; exists {
+			Logger.Debugf("Skipping field %s; Options %v", v.Field.Name, v.Options)
+			continue
 		}
+		// Nested fields are not columns either. They are used by sqlx for other purposes.
 		if strings.Contains(k, `.`) {
 			continue
 		}
-		columns = append(columns, k)
+		m.columns = append(m.columns, k)
 	}
-	Logger.Debugf(`columns: %#v`, columns)
-	return columns
+	Logger.Debugf(`columns: %#v`, m.columns)
+
+	return m.columns
 }
 
 /*
 Insert inserts a set of SqlxRows instances (without their ID values) and
 returns [sql.Result] and [error]. The value for the autoincremented primary key
-(usually ID column) is left to be set by the database. If the records to be
-inserted are more than one, the data is inserted in a transaction. If there are
-no records to be inserted, it panics.
-If you need to insert an SqlxRows structure with a specific value for ID, use
-directly some of the [sqlx] functionnalities.
+(usually ID column) is left to be set by the database.
+
+If the records to be inserted are more than one, the data is inserted in a
+transaction. If there are no records to be inserted, it panics.
+
+If you need to insert an [SqlxRows] structure with a specific value for ID, add a
+tag to the ID column `rx:id,no_auto` or use directly [sqlx].
+
+If you want to skip any field during insert add, a tag to it `rx:field_name,auto`.
 */
 func (m *Modelx[R]) Insert() (sql.Result, error) {
 	dataLen := len(m.data)
 	if dataLen == 0 {
 		Logger.Panic("Cannot insert, when no data is provided!")
 	}
-	colsNoID := m.colsWithoutID()
-	placeholders := strings.Join(colsNoID, ",:") // :login_name,:changed_by...
+	noAutoColumns := make([]string, 0, len(m.Columns())-1)
+	names := m.fieldsMap().Names
+	for _, col := range m.Columns() {
+		// do NOT skip no_auto IDs
+		if _, no := names[col].Options[`no_auto`]; col == `id` && !no {
+			continue
+		}
+		// skip collumns with tag `auto`
+		if _, ok := names[col].Options[`auto`]; ok {
+			continue
+		}
+		noAutoColumns = append(noAutoColumns, col)
+	}
+	placeholders := strings.Join(noAutoColumns, ",:") // :login_name,:changed_by...
 	placeholders = sprintf("(:%s)", placeholders)
 	stash := map[string]any{
-		`columns`:      strings.Join(colsNoID, ","),
+		`columns`:      strings.Join(noAutoColumns, ","),
 		`table`:        m.Table(),
 		`placeholders`: placeholders,
 	}
@@ -345,41 +376,6 @@ func (m *Modelx[R]) Insert() (sql.Result, error) {
 
 	}
 	return DB().NamedExec(query, m.data[0])
-}
-
-/*
-AutoFields looks for fields annotated with tag `rowx:"column_name,auto"` and
-returns them. Finally if there is a field with the name `ID`, it is used as the
-only element in the list to be returned. It assumes that such fields do not
-have to be inserted and are managed by the database. These are autoincremented
-primary keys, fields, filled with data after insert or before update by a
-trigger, etc (https://sqlite.org/lang_createtrigger.html). Returns a list of
-such columns. If you want to avoid these actions, you will have to override
-this method for your type or set of types and hardcode the fields or return an
-empty slice. This method is used in [Modelx.Insert] to avoid inserting default
-values from Go.
-*/
-func (m *Modelx[R]) AutoFields() []string {
-	return []string{`id`}
-}
-
-// colsWithoutID retrurns a new slice, which does not contain the 'id' element.
-func (m *Modelx[R]) colsWithoutID() []string {
-	cols := m.Columns()
-	placeholdersForInsert := make([]string, 0, len(cols)-1)
-	prims := m.AutoFields()
-COLS:
-	for _, v := range cols {
-		//FIXME: implement PrimaryKey() method, returning a list of column names used
-		//together as a primary key constraint.
-		for _, k := range prims {
-			if v == k {
-				continue COLS
-			}
-		}
-		placeholdersForInsert = append(placeholdersForInsert, v)
-	}
-	return placeholdersForInsert
 }
 
 /*

@@ -56,7 +56,7 @@ func SQLForSET(columns []string) string {
 
 		set.WriteString(sprintf(` %s = :%[1]s,`, v))
 	}
-	setStr := strings.TrimRight(set.String(), `,`)
+	setStr := strings.TrimSuffix(set.String(), `,`)
 	Logger.Debugf(`SQL from SQLForSET:'%s'`, setStr)
 	return setStr
 }

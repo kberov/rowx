@@ -10,8 +10,9 @@ import (
 // 'users' and returns it. Panics if unsuccessful.
 func TypeToSnakeCase[R any](row R) string {
 	typestr := sprintf("%T", row)
+	// Logger.Debugf("TypeToSnakeCase typestr: %s", typestr)
 	_, table, ok := strings.Cut(typestr, `.`)
-	if !ok || strings.ContainsAny(table, `*{}[]`) {
+	if !ok {
 		Logger.Panicf("Could not derive table name from type '%s'!", typestr)
 	}
 	return CamelToSnakeCase(table)
