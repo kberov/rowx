@@ -365,9 +365,9 @@ func (m *Modelx[R]) Insert() (sql.Result, error) {
 
 /*
 Select prepares and executes a SELECT statement. Selected records can be used
-with [SqlxModel.Data].`limitAndOffset` is expected to be used as a variadic
+with [SqlxModel.Data]. `limitAndOffset` is expected to be used as a variadic
 parameter. If passed, it is expected to consist of two values limit and offset
-- in that order. The default value  for LIMIT can be set by [DefaultLimit].
+- in that order. The default value for LIMIT can be set by [DefaultLimit].
 OFFSET is 0 by default.
 */
 func (m *Modelx[R]) Select(where string, bindData any, limitAndOffset ...int) ([]R, error) {
@@ -404,7 +404,7 @@ func (m *Modelx[R]) renderSelectTemplate(where string, limitAndOffset []int) str
 	stash := map[string]any{
 		`columns`: strings.Join(m.Columns(), ","),
 		`table`:   m.Table(),
-		`WHERE`:   where,
+		`WHERE`:   ifWhere(where),
 		`limit`:   strconv.Itoa(limitAndOffset[0]),
 		`offset`:  strconv.Itoa(limitAndOffset[1]),
 	}
@@ -419,12 +419,22 @@ Get executes [sqlx.DB.Get] and returns the result scanned into an instantiated
 */
 func (m *Modelx[R]) Get(where string, bindData any) (*R, error) {
 	row := new(R)
+	if bindData == nil {
+		bindData = struct{}{}
+	}
 	query := m.renderSelectTemplate(where, []int{1, 0})
 	q, args, err := namedInRebind(query, bindData)
 	if err != nil {
 		return row, err
 	}
 	return row, DB().Get(row, q, args...)
+}
+
+func ifWhere(where string) string {
+	if where != `` {
+		where = sprintf(`WHERE %s`, where)
+	}
+	return where
 }
 
 func namedInRebind(query string, bindData any) (string, []any, error) {
@@ -482,7 +492,7 @@ func (m *Modelx[R]) Update(fields []string, where string) (sql.Result, error) {
 		`table`: m.Table(),
 		// TODO: Prevent updating AutoFields in any case.
 		`SET`:   SQLForSET(fields),
-		`WHERE`: where,
+		`WHERE`: ifWhere(where),
 	}
 	query := RenderSQLTemplate(`UPDATE`, stash)
 	Logger.Debugf("Rendered UPDATE query : %s;", query)
@@ -510,7 +520,7 @@ Delete deletes records from the database.
 func (m *Modelx[R]) Delete(where string, bindData any) (sql.Result, error) {
 	stash := map[string]any{
 		`table`: m.Table(),
-		`WHERE`: where,
+		`WHERE`: ifWhere(where),
 	}
 	if bindData == nil {
 		bindData = map[string]any{}

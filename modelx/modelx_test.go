@@ -135,15 +135,15 @@ func TestTryEmbed(t *testing.T) {
 		},
 	}
 	ug.SetData(ugDataUpd)
-	//                     set columns           WHERE struct
-	rs, err = ug.Update([]string{`group_id`}, `WHERE user_id=:user_id AND group_id=:where.group_id`)
+	//							set columns										WHERE struct
+	rs, err = ug.Update([]string{`group_id`}, `user_id=:user_id AND group_id=:where.group_id`)
 	reQ.NoError(err)
 	rows, errAff = rs.RowsAffected()
 	reQ.NoError(errAff)
 	reQ.Equal(int64(1), rows)
 	// Get the row to see what we did.
 	row, err := ug.Get(
-		`WHERE user_id = :uid AND group_id = :gid`,
+		`user_id = :uid AND group_id = :gid`,
 		map[string]any{`uid`: 3, `gid`: ug.Data()[0].Where.GroupID})
 	if err != nil {
 		t.Logf(`err: %s`, err.Error())
@@ -152,7 +152,7 @@ func TestTryEmbed(t *testing.T) {
 	// Delete the inserted users, so the next tests pass and see if "ON DELETE
 	// CASCADE" worked in the database. Also reset the sequence for
 	// AUTOINCREMENT fro table users.
-	rs, err = modelx.NewModelx[Users]().Delete(`WHERE id>=:id`, map[string]any{`id`: 0})
+	rs, err = modelx.NewModelx[Users]().Delete(`id>=:id`, map[string]any{`id`: 0})
 	reQ.NoError(err)
 	rows, errAff = rs.RowsAffected()
 	reQ.NoError(errAff)
@@ -213,27 +213,23 @@ func TestColumns(t *testing.T) {
 }
 
 func TestSingleInsert(t *testing.T) {
+	reQ := require.New(t)
 	m := modelx.NewModelx[Users](users[0])
+
 	r, e := m.Insert()
-	if e != nil {
-		t.Errorf("Got error from m.Insert(): %v", e)
-		return
-	}
-	if id, e := r.LastInsertId(); e != nil {
-		t.Errorf("Error: %v", e)
-	} else {
-		t.Logf("LastInsertId: %d", id)
-	}
-	if r, e := r.RowsAffected(); e != nil {
-		t.Errorf("Error: %v", e)
-	} else {
-		t.Logf("RowsAffected: %d", r)
-	}
+	reQ.NoErrorf(e, "Got error from m.Insert(): %v", e)
+
+	id, e := r.LastInsertId()
+	reQ.NoErrorf(e, "Error: %v", e)
+	t.Logf("LastInsertId: %d", id)
+
+	rows, e := r.RowsAffected()
+	reQ.NoErrorf(e, "Error: %v", e)
+	t.Logf("RowsAffected: %d", rows)
+
 	u := &Users{}
 	_ = modelx.DB().Get(u, `SELECT * FROM users WHERE id=?`, 1)
-	if u.LoginName != users[0].LoginName {
-		t.Errorf("Expected LoginName: %s. Got: %s!", users[0].LoginName, u.LoginName)
-	}
+	reQ.Equalf(users[0].LoginName, u.LoginName, "Expected LoginName: %s. Got: %s!", users[0].LoginName, u.LoginName)
 	t.Logf(`First selected user: %#v`, u)
 }
 
@@ -241,9 +237,7 @@ func TestMultyInsert(t *testing.T) {
 	// t.Logf("Starting from second user: %#v;", users[1:])
 	m := modelx.NewModelx(users[1:]...)
 	r, e := m.Insert()
-	if e != nil {
-		t.Errorf("sql.Result:%#v; Error:%#v;", r, e)
-	}
+	require.NoErrorf(t, e, "sql.Result:%#v; Error:%#v;", r, e)
 	t.Logf("sql.Result:%#v; Error:%#v;", r, e)
 }
 
@@ -283,7 +277,7 @@ func TestSelect(t *testing.T) {
 		{
 			// Does a SELECT with WHERE id<:id
 			name:     `WithWhere`,
-			where:    `WHERE id >:id`,
+			where:    `id >:id`,
 			bindData: map[string]any{`id`: 1},
 			lastID:   3,
 		},
@@ -297,7 +291,7 @@ func TestSelect(t *testing.T) {
 		},
 		{
 			name:          `SelectError`,
-			where:         `WHERE id=:id`,
+			where:         `id=:id`,
 			bindData:      map[string]any{},
 			lastID:        3,
 			expectedError: true,
@@ -305,13 +299,13 @@ func TestSelect(t *testing.T) {
 		},
 		{
 			name:     `SelectIN`,
-			where:    `WHERE id IN(:ids)`,
+			where:    `id IN(:ids)`,
 			bindData: map[string]any{`ids`: []int{1, 2, 3}},
 			lastID:   3,
 		},
 		{
 			name:     `SelectOrderByDesc`,
-			where:    `WHERE id IN(:ids) ORDER BY id DESC`,
+			where:    `id IN(:ids) ORDER BY id DESC`,
 			bindData: map[string]any{`ids`: []int{1, 2, 3}},
 			lastID:   1,
 		},
@@ -350,8 +344,8 @@ func TestUpdate(t *testing.T) {
 	}{
 		{
 			name:        `One`,
-			where:       `WHERE id=:id`,
-			selectWhere: `WHERE id=:id`,
+			where:       `id=:id`,
+			selectWhere: `id=:id`,
 			Modelx: modelx.NewModelx(Users{LoginName: `first_updated`, ID: 1,
 				GroupID: sql.NullInt32{Valid: true, Int32: 0}}),
 			affected:   1,
@@ -362,8 +356,8 @@ func TestUpdate(t *testing.T) {
 		{
 			name: `ManyUniqueConstraintFail`,
 			// this WHERE clause will produce UNIQUE CONSTRAINT Error, because login_name is UNIQUE.
-			where:       `WHERE id IN(SELECT id FROM users WHERE ID>1)`,
-			selectWhere: `WHERE id IN(SELECT id FROM users WHERE ID>1)`,
+			where:       `id IN(SELECT id FROM users WHERE ID>1)`,
+			selectWhere: `id IN(SELECT id FROM users WHERE ID>1)`,
 			Modelx: modelx.NewModelx(
 				Users{LoginName: `second_updated`, ID: 2},
 				Users{LoginName: `third_updated`, ID: 3, GroupID: sql.NullInt32{Valid: true, Int32: 2}},
@@ -375,7 +369,7 @@ func TestUpdate(t *testing.T) {
 		{
 			name: `ManyUniqueConstraintOK`,
 			// this WHERE clause will NOT produce UNIQUE CONSTRAINT Error, because id is PRIMARY KEY.
-			where: `WHERE id = :id`,
+			where: `id = :id`,
 			Modelx: modelx.NewModelx(
 				Users{LoginName: `second_updated_ok`, ID: 2, GroupID: sql.NullInt32{Valid: true, Int32: 2}},
 				Users{LoginName: `third_updated_ok`, ID: 3, GroupID: sql.NullInt32{Valid: true, Int32: 3}},
@@ -383,7 +377,7 @@ func TestUpdate(t *testing.T) {
 			affected:    2,
 			columns:     []string{`login_name`, `GroupID`},
 			dbError:     false,
-			selectWhere: `WHERE id IN(:id)`,
+			selectWhere: `id IN(:id)`,
 			selectBind:  map[string]any{`id`: []any{2, 3}},
 		},
 	}
@@ -440,13 +434,13 @@ func TestDelete(t *testing.T) {
 	}{
 		{
 			name:     `One`,
-			where:    `WHERE id=:some_id`,
+			where:    `id=:some_id`,
 			bind:     map[string]any{`some_id`: 1},
 			affected: 1,
 		},
 		{
 			name:     `Many`,
-			where:    `WHERE id > 1`,
+			where:    `id > 1`,
 			affected: 2,
 		},
 	}
@@ -476,32 +470,29 @@ type myModel[R modelx.SqlxRows] struct {
 func (m *myModel[R]) Data() []R {
 	return m.data
 }
+
 func (m *myModel[R]) mySelect() ([]R, error) {
 	modelx.Logger.Debugf(`executing SELECT from an extending type: %T`, m)
 	err := modelx.DB().Select(&m.data, `SELECT * from groups limit 100`)
 	return m.data, err
 }
+
 func TestWrap(t *testing.T) {
 	reQ := require.New(t)
 	// ---
 	mm := &myModel[Groups]{}
 	reQ.Equalf(`groups`, mm.Table(), `Wrong table for myModel: %s`, mm.Table())
 
-	data, err := mm.Select(`WHERE id >:id`, modelx.SQLMap{`id`: 1})
+	data, err := mm.Select(`id >:id`, modelx.SQLMap{`id`: 1})
 	reQ.NoError(err, `Unexpected error:%#v`, err)
 	reQ.Equalf(3, len(data), `Expected 3 rows from the database but got %d.`, len(data))
 
 	m := &myModel[Groups]{}
 	data, _ = m.mySelect()
+	reQ.Equalf(5, len(data), `Expected 5 rows from the database but got %d.`, len(data))
+	reQ.Equalf(data[0], m.Data()[0], `m.Data() and data should point to the same data!`)
 
-	if len(data) != 5 {
-		t.Errorf(`Expected 5 rows from the database but got %d.`, len(data))
-	}
-	if data[0] != m.Data()[0] {
-		t.Error(`m.Data() and data should point to the same data!`)
-	}
-	t.Logf("Extending object's m.Data(): %#v", m.Data())
-
+	// test behaviour of tag option `auto`
 	type Foo struct {
 		Foo         uint32 `rx:"bar,auto"`
 		Description string
@@ -513,7 +504,7 @@ func TestWrap(t *testing.T) {
 	)
 	_, err = foo.Insert()
 	reQ.NoError(err)
-	firstFoo, err := foo.Get(`WHERE bar =1`, map[string]any{})
+	firstFoo, err := foo.Get(`bar =1`, nil)
 	reQ.NoError(err)
 	reQ.Equal(`first record`, firstFoo.Description)
 }
@@ -534,7 +525,7 @@ func TestPanics(t *testing.T) {
 			name: `UpdateNoData`,
 			fn: func() {
 				g := modelx.NewModelx[Groups]()
-				_, _ = g.Update(g.Columns(), `WHERE 1`)
+				_, _ = g.Update(g.Columns(), `1`)
 			},
 		},
 		{
