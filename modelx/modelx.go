@@ -36,19 +36,12 @@ var (
 	// first call of DB() and the log level is set to log.DEBUG.
 	Logger *log.Logger
 	// ReflectXTag sets the tag name for identifying tags, read and acted upon
-	// by sqlx and rowx.
+	// by sqlx and Modelx.
 	ReflectXTag = `rx`
 	// singleDB is a singleton for the connection pool to the database.
 	singleDB *sqlx.DB
 	sprintf  = fmt.Sprintf
-	// Make sure that Modelx implements the full SqlxModel interface.
-	_ SqlxModel[SqlxRows] = (*alabala)(nil)
 )
-
-type alabala struct {
-	*Modelx[SqlxRows]
-	ID int32
-}
 
 /*
 DB  instantiates the [log.Logger], invokes [sqlx.MustConnect] and sets the
@@ -94,8 +87,7 @@ type SqlxModel[R SqlxRows] interface {
 
 /*
 SqlxModelInserter can be implemented to insert records in a table. It is fully
-implemented by [Modelx]. You can embed (extend) Modelx to get automatically
-its implementation and override some of its methods.
+implemented by [Modelx].
 */
 type SqlxModelInserter[R SqlxRows] interface {
 	Table() string
@@ -105,8 +97,7 @@ type SqlxModelInserter[R SqlxRows] interface {
 
 /*
 SqlxModelUpdater can be implemented to update records in a table. It is fully
-implemented by [Modelx]. You can embed (extend) Modelx to get automatically
-its implementation and override some of its methods.
+implemented by [Modelx].
 */
 type SqlxModelUpdater[R SqlxRows] interface {
 	Table() string
@@ -115,8 +106,7 @@ type SqlxModelUpdater[R SqlxRows] interface {
 
 /*
 SqlxModelGetter can be implemented to get one record from the database. It is
-fully implemented by [Modelx]. You can embed (extend) Modelx to get
-automatically its implementation and override some of its methods.
+fully implemented by [Modelx].
 */
 type SqlxModelGetter[R SqlxRows] interface {
 	Table() string
@@ -126,8 +116,7 @@ type SqlxModelGetter[R SqlxRows] interface {
 
 /*
 SqlxModelSelector can be implemented to select records from a table or view. It
-is fully implemented by [Modelx]. You can embed (extend) Modelx to get
-automatically its implementation and override some of its methods.
+is fully implemented by [Modelx].
 */
 type SqlxModelSelector[R SqlxRows] interface {
 	SqlxModelGetter[R]
@@ -136,8 +125,7 @@ type SqlxModelSelector[R SqlxRows] interface {
 
 /*
 SqlxModelDeleter can be implemented to delete records from a table. It is
-fully implemented by [Modelx]. You can embed (extend) Modelx to get
-automatically it's implementation and override some of its methods.
+fully implemented by [Modelx].
 */
 type SqlxModelDeleter[R SqlxRows] interface {
 	Table() string
@@ -185,11 +173,9 @@ To embed this type, write something similar to the following:
 	// And you can implement your own Columns() and Table()...
 */
 type Modelx[R SqlxRows] struct {
-	// An instance of the underlying generict type, kept just for getting
-	// metadata from it.
-	r *R
-	// structMap is an index of field metadata for the underlying struct R.
-	structMap *reflectx.StructMap
+	table string
+	// columns of the table are populated upon first use of '.Columns()'.
+	columns []string
 	/*
 		data is a slice of rows, retrieved from the database or to be inserted,
 		or updated.
@@ -200,9 +186,8 @@ type Modelx[R SqlxRows] struct {
 		it is guessed and set from the type of the first element of Data slice
 		upon first use of '.Table()'.
 	*/
-	table string
-	// columns of the table are populated upon first use of '.Columns()'.
-	columns []string
+	// structMap is an index of field metadata for the underlying struct R.
+	structMap *reflectx.StructMap
 }
 
 /*
