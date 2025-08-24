@@ -642,6 +642,28 @@ func ExampleModelx_Data() {
 	// User.LoginName: the_second, User.ChangedBy.Int32: 1
 }
 
+func ExampleModelx_SetData() {
+
+	ugDataIns := []UserGroup{
+		UserGroup{UserID: 1, GroupID: 1},
+		UserGroup{UserID: 2, GroupID: 2},
+		UserGroup{UserID: 3, GroupID: 3},
+		UserGroup{UserID: 1, GroupID: 4},
+		UserGroup{UserID: 2, GroupID: 4},
+	}
+	ug := modelx.NewModelx[UserGroup]().SetData(ugDataIns)
+	for i, row := range ug.Data() {
+		fmt.Printf("%d: UserID: %d; GroupID: %d\n", i+1, row.UserID, row.GroupID)
+	}
+	// Output:
+	//
+	// 1: UserID: 1; GroupID: 1
+	// 2: UserID: 2; GroupID: 2
+	// 3: UserID: 3; GroupID: 3
+	// 4: UserID: 1; GroupID: 4
+	// 5: UserID: 2; GroupID: 4
+}
+
 func ExampleModelx_Table() {
 	type WishYouWereHere struct {
 		ID       uint32
@@ -653,4 +675,73 @@ func ExampleModelx_Table() {
 	// Output:
 	// TableName: wish_you_were_here
 	//
+}
+
+func ExampleModelx_Columns() {
+
+	type Books struct {
+		ID     uint32
+		Title  string
+		Author string
+		Body   string
+		//...
+	}
+
+	b := Books{Title: `Нова земя`, Author: `Иванъ Вазовъ`, Body: `По стръмната южна урва на Амбарица...`}
+	fmt.Printf("Columns: %+v\n", modelx.NewModelx(b).Columns())
+
+	// Output:
+	// Columns: [id title author body]
+}
+
+func ExampleModelx_Get() {
+	bindVars := struct{ ID int32 }{ID: 1}
+	u, err := modelx.NewModelx[Users]().Get(`id=:id`, bindVars)
+	if err == nil {
+		fmt.Println(u.LoginName)
+		// Output:
+		// first
+		return
+	}
+	fmt.Printf("err: %s", err)
+
+}
+
+func ExampleModelx_Insert() {
+	usrs := []Users{
+		Users{LoginName: `fourth`},
+		Users{LoginName: `fifth`},
+	}
+
+	r, err := modelx.NewModelx[Users](usrs...).Insert()
+
+	if err == nil {
+		last, _ := r.LastInsertId()
+		fmt.Println(last)
+		// Output:
+		//  5
+		return
+	}
+	fmt.Printf("err: %s", err)
+
+}
+
+func ExampleModelx_Update() {
+
+}
+
+func ExampleModelx_Select() {
+
+	bind := struct{ IDs []uint }{IDs: []uint{1, 2, 3}}
+	data, err := modelx.NewModelx[Users]().Select(`id IN(:ids)`, bind)
+	if err != nil {
+		fmt.Println(err.Error())
+	}
+	for i, u := range data {
+		fmt.Printf("%d: %s\n", i+1, u.LoginName)
+	}
+	// Output:
+	// 1: first
+	// 2: the_second
+	// 3: the_third
 }

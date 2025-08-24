@@ -80,6 +80,7 @@ Modelx to get automatically its implementation and override some of its
 methods.
 */
 type SqlxModel[R SqlxRows] interface {
+	SetData([]R) SqlxModel[R]
 	SqlxModelInserter[R]
 	SqlxModelSelector[R]
 	SqlxModelUpdater[R]
@@ -460,7 +461,7 @@ func namedInRebind(query string, bindData any) (string, []any, error) {
 		return query, args, err
 	}
 	q = DB().Rebind(q)
-	Logger.Debugf(`Rebound query: q|args:%+v| err: %+v`, q, args, err)
+	Logger.Debugf(`Rebound query: %s|args:%+v| err: %+v`, q, args, err)
 	return q, args, err
 }
 
