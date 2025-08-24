@@ -1,8 +1,8 @@
 /*
-Package modelx provides interfaces and a generic data type, implementing the
-interfaces to work easily with sets of database records. Underneath [sqlx] is
-used. Package modelx provides just an object mapper. The relations' constraints
-are left to be managed by the database and you.
+Package modelx is an object mapper. For struct scanning [sqlx] is used. It
+provides interfaces and a generic data type, and implements the interfaces to
+work easily with sets of database records. The relations' constraints are left
+to be managed by the database and you.
 
 By default the current implementation assumes that the primary key name is
 `ID`. Of course the primary key can be more than one column and with arbitrary
@@ -29,10 +29,11 @@ var (
 	DefaultLogHeader = `${prefix}:${level}:${short_file}:${line}`
 	// DefaultLimit is the default LIMIT for SQL queries.
 	DefaultLimit = 100
-	// DriverName is the name of the database engine to use.
+	// DriverName is the name of the database engine to use. It is set by
+	// default to `sqlite3`.
 	DriverName = `sqlite3`
-	// DSN must be set before using DB() function.
-	DSN string
+	// DSN must be set before using DB() function. It is set by default to `:memory:`.
+	DSN = `:memory:`
 	// Logger is instantiated (if not instantiated already externally) during
 	// first call of DB() and the log level is set to log.DEBUG.
 	Logger *log.Logger
@@ -79,7 +80,6 @@ Modelx to get automatically its implementation and override some of its
 methods.
 */
 type SqlxModel[R SqlxRows] interface {
-	Data() []R
 	SqlxModelInserter[R]
 	SqlxModelSelector[R]
 	SqlxModelUpdater[R]
@@ -91,6 +91,7 @@ SqlxModelInserter can be implemented to insert records in a table. It is fully
 implemented by [Modelx].
 */
 type SqlxModelInserter[R SqlxRows] interface {
+	Data() []R
 	Table() string
 	Columns() []string
 	Insert() (sql.Result, error)
@@ -101,6 +102,7 @@ SqlxModelUpdater can be implemented to update records in a table. It is fully
 implemented by [Modelx].
 */
 type SqlxModelUpdater[R SqlxRows] interface {
+	Data() []R
 	Table() string
 	Update([]string, string) (sql.Result, error)
 }
@@ -112,7 +114,7 @@ fully implemented by [Modelx].
 type SqlxModelGetter[R SqlxRows] interface {
 	Table() string
 	Columns() []string
-	Get(string, any) (*R, error)
+	Get(string, ...any) (*R, error)
 }
 
 /*
@@ -171,7 +173,7 @@ To embed this type, write something similar to the following:
 	mm = new(MyTableName)
 	// WHERE clause can be as complex as you need.
 	data, err := mm.Select(`WHERE id >:id`, map[string]any{`id`: 1}.
-	// And you can implement your own Columns() and Table()...
+	// And you may want to implement your own Columns() and Table()...
 */
 type Modelx[R SqlxRows] struct {
 	/*
@@ -217,7 +219,8 @@ func (m *Modelx[R]) fieldsMap() *reflectx.StructMap {
 	return m.structMap
 }
 
-// Table returns the guessed table name from the generic type parameter.
+// Table returns the converted to snake case name of the type to be used as
+// table name in sql queries.
 func (m *Modelx[R]) Table() string {
 	if m.table != "" {
 		return m.table
@@ -235,13 +238,11 @@ func (m *Modelx[R]) Data() []R {
 }
 
 /*
-SetData sets a slice of R to be inserted or updated in the database. Please
-note, that the embedding type must have its own private field `data` if you
-embed `NewModelx[YourTable]` instead using it directly. See
-[modelx_test.TestTryEmbed] for example.
+SetData sets a slice of R to be inserted or updated in the database.
 */
-func (m *Modelx[R]) SetData(data []R) {
+func (m *Modelx[R]) SetData(data []R) SqlxModel[R] {
 	m.data = data
+	return m
 }
 
 /*
@@ -254,12 +255,12 @@ func (m *Modelx[R]) Columns() []string {
 	/*
 	   TODO: Some day... use go:generate to move such code to compile time for
 	   SqlxRows implementing types. Consider also a solution to (eventually
-	   gradually) regenerate Rowx embedding types and recompile the application
-	   due to changes in the database schema. This is how we can implement
-	   database migrations starting from the database.
-	   1. During development the owner of the user code changes the development
-	   database and runs `go generate && go build -ldflags "-s -w" ./...` to
-	   (re-)generate types which will embed Rowx. Then recompiles the
+	   gradually) regenerate Modelx embedding types and recompile the
+	   application due to changes in the database schema. This is how we can
+	   implement database migrations starting from the database.  1. During
+	   development the owner of the user code changes the development database
+	   and runs `go generate && go build -ldflags "-s -w" ./...` to
+	   (re-)generate types which may need to embed Modelx. Then recompiles the
 	   application.
 	   2. Next he/she prepares the sql migration file to be run on the
 	   production database. It should not be harmfull if some defined fields in
@@ -301,7 +302,7 @@ func (m *Modelx[R]) Columns() []string {
 }
 
 /*
-Insert inserts a set of SqlxRows instances (without their ID values) and
+Insert inserts a set of SqlxRows instances (without their primary key values) and
 returns [sql.Result] and [error]. The value for the autoincremented primary key
 (usually ID column) is left to be set by the database.
 
@@ -314,18 +315,19 @@ tag to the ID column `rx:id,no_auto` or use directly [sqlx].
 If you want to skip any field during insert add, a tag to it `rx:field_name,auto`.
 */
 func (m *Modelx[R]) Insert() (sql.Result, error) {
-	dataLen := len(m.data)
+	dataLen := len(m.Data())
 	if dataLen == 0 {
 		Logger.Panic("Cannot insert, when no data is provided!")
 	}
+	// TODO: Think of caching noAutoColumns (and use go:generate for all metadata)
 	noAutoColumns := make([]string, 0, len(m.Columns())-1)
 	names := m.fieldsMap().Names
 	for _, col := range m.Columns() {
-		// do NOT skip no_auto IDs
-		if _, no := names[col].Options[`no_auto`]; col == `id` && !no {
+		// insert column named ID but with tag option no_auto: `rx:"id,no_auto"`
+		if _, isNoAuto := names[col].Options[`no_auto`]; col == `id` && isNoAuto {
 			continue
 		}
-		// skip collumns with tag `auto`
+		// do not insert collumns with tag `auto`
 		if _, ok := names[col].Options[`auto`]; ok {
 			continue
 		}
@@ -333,6 +335,7 @@ func (m *Modelx[R]) Insert() (sql.Result, error) {
 	}
 	placeholders := strings.Join(noAutoColumns, ",:") // :login_name,:changed_by...
 	placeholders = sprintf("(:%s)", placeholders)
+	// END TODO
 	stash := map[string]any{
 		`columns`:      strings.Join(noAutoColumns, ","),
 		`table`:        m.Table(),
@@ -349,7 +352,8 @@ func (m *Modelx[R]) Insert() (sql.Result, error) {
 		tx = DB().MustBegin()
 		// The rollback will be ignored if the tx has been committed already.
 		defer func() { _ = tx.Rollback() }()
-		for _, row := range m.data {
+		for _, row := range m.Data() {
+			// Logger.Debugf("Inserting row: %+v", row)
 			r, e = tx.NamedExec(query, row)
 			if e != nil {
 				return r, e
@@ -418,23 +422,29 @@ func (m *Modelx[R]) renderSelectTemplate(where string, limitAndOffset []int) str
 Get executes [sqlx.DB.Get] and returns the result scanned into an instantiated
 [SqlxRows] object or an error.
 */
-func (m *Modelx[R]) Get(where string, bindData any) (*R, error) {
+func (m *Modelx[R]) Get(where string, bindData ...any) (*R, error) {
 	row := new(R)
-	if bindData == nil {
-		bindData = struct{}{}
-	}
 	query := m.renderSelectTemplate(where, []int{1, 0})
-	q, args, err := namedInRebind(query, bindData)
+	var (
+		q    string
+		args []any
+		err  error
+	)
+	if len(bindData) == 0 {
+		bindData = append(bindData, struct{}{})
+	}
+	q, args, err = namedInRebind(query, bindData[0])
 	if err != nil {
 		return row, err
+
 	}
 	return row, DB().Get(row, q, args...)
 }
 
-var startsWithWhere = regexp.MustCompile(`(?i:^\s*?where)`)
+var isWhere = regexp.MustCompile(`(?i:^\s*?where\s)`)
 
 func ifWhere(where string) string {
-	if where != `` && !startsWithWhere.MatchString(where) {
+	if where != `` && !isWhere.MatchString(where) {
 		where = sprintf(`WHERE %s`, where)
 	}
 	return where
@@ -450,6 +460,7 @@ func namedInRebind(query string, bindData any) (string, []any, error) {
 		return query, args, err
 	}
 	q = DB().Rebind(q)
+	Logger.Debugf(`Rebound query: q|args:%+v| err: %+v`, q, args, err)
 	return q, args, err
 }
 
@@ -469,7 +480,7 @@ the needed row for update by primary key column. A solution is to have a nested
 structure in the passed record, used only as parameters for the query.
 We can enrich our structure, representing the database record with a `Where`
 field which is a structure and holds the current values. Look in the tests for
-an example of supdating such an enriched record. Also we can use for our
+an example of updating such an enriched record. Also we can use for our
 columns types like [sql.NullInt32] and such, provided by the [sql] package.
 
 `fields` is the list of columns to be updated - used to construct the `SET col
@@ -479,7 +490,7 @@ converted to snake_case.
 For any case in which this method is not suitable, use directly sqlx.
 */
 func (m *Modelx[R]) Update(fields []string, where string) (sql.Result, error) {
-	if len(m.data) == 0 {
+	if len(m.Data()) == 0 {
 		Logger.Panic("Cannot update, when no data is provided!")
 	}
 	var (
@@ -503,7 +514,7 @@ func (m *Modelx[R]) Update(fields []string, where string) (sql.Result, error) {
 	if e != nil {
 		return nil, e
 	}
-	for _, row := range m.data {
+	for _, row := range m.Data() {
 		Logger.Debugf("Update row: %+v;", row)
 		r, e = namedStmt.Exec(row)
 		if e != nil {

@@ -6,8 +6,11 @@ import (
 	"unicode/utf8"
 )
 
-// TypeToSnakeCase converts struct type name like *model.Users to
-// 'users' and returns it. Panics if unsuccessful.
+/*
+TypeToSnakeCase converts struct type name like
+*model.AVeryLongAndComplexTableName to 'a_very_long_and_complex_table_name' and
+returns it. Panics if unsuccessful.
+*/
 func TypeToSnakeCase[R any](row R) string {
 	typestr := sprintf("%T", row)
 	// Logger.Debugf("TypeToSnakeCase typestr: %s", typestr)
@@ -19,9 +22,10 @@ func TypeToSnakeCase[R any](row R) string {
 }
 
 /*
-CamelToSnakeCase is used to convert table names and structure fields to snake
-case table columns. We also pass it to [sqlx.DB.MapperFunc].
-UserLastFiveComments becomes user_last_five_comments.
+CamelToSnakeCase is used to convert type names and structure fields to snake
+case table columns. We pass it to [reflectx.NewMapperFunc] together with
+[ReflectXTag]. The string `UserLastFiveComments` is transformed to
+`user_last_five_comments`.
 */
 func CamelToSnakeCase(text string) string {
 	if utf8.RuneCountInString(text) == 2 {

@@ -38,8 +38,8 @@ func RenderSQLTemplate(key string, stash map[string]any) string {
 }
 
 /*
-SQLForSET produces the `SET column = :column,...` for an UPDATE query from
-a list of columns. It also makes each column snake_case if it starts with a
+SQLForSET produces the `SET column = :column,...` for an UPDATE query from a
+slice of columns` names. It also makes each column snake_case if it contains a
 capital letter.
 */
 func SQLForSET(columns []string) string {

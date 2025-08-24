@@ -1,6 +1,7 @@
 package modelx_test
 
 import (
+	"crypto/sha256"
 	"database/sql"
 	"fmt"
 	"regexp"
@@ -40,7 +41,8 @@ CREATE TABLE user_group (
 
 CREATE TABLE foo(
 	bar INTEGER PRIMARY KEY AUTOINCREMENT,
-	description VARCHAR(255) NOT NULL DEFAULT ''
+	description VARCHAR(255) NOT NULL DEFAULT '',
+	id VARCHAR(56) UNIQUE NOT NULL DEFAULT ''
 );
 
 PRAGMA foreign_keys = ON;
@@ -497,19 +499,29 @@ func TestWrap(t *testing.T) {
 	type Foo struct {
 		Foo         uint32 `rx:"bar,auto"`
 		Description string
+		ID          string `id:"id,no_auto"`
 	}
 
 	foo := modelx.NewModelx[Foo](
 		Foo{Description: `first record`},
 		Foo{Description: `second record`},
 	)
+	for i, f := range foo.Data() {
+		f.ID = fmt.Sprintf("%x", sha256.Sum224([]byte(f.Description)))
+		foo.Data()[i] = f
+	}
 	_, err = foo.Insert()
 	reQ.NoError(err)
-	// Using the keyword WHERE is optional and can be written even if only for
+	// Using the keyword WHERE is optional, but can be written even if only for
 	// expressiveness.
-	firstFoo, err := foo.Get(`WHERE bar=1`, nil)
+	firstFoo, err := foo.Get(`WHERE bar=1`)
 	reQ.NoError(err)
+	d, e := modelx.NewModelx[Foo]().Select(`id IN(:ids)`, map[string]any{`ids`: []int32{1, 2}})
+	t.Logf("%+v, %v", d, e)
 	reQ.Equal(`first record`, firstFoo.Description)
+	secondFoo, err := foo.Get(`bar=2`)
+	reQ.NoError(err)
+	reQ.Equal(`second record`, secondFoo.Description)
 }
 
 func TestPanics(t *testing.T) {
@@ -564,19 +576,81 @@ func expectPanic(t *testing.T, f func()) {
 	f()
 }
 
-var aStr = ` WHERE bar=1`
+var aStr = `           WHERE bar=1`
 
 func Benchmark_stringContainsWhere(b *testing.B) {
 	for b.Loop() {
-		strings.Contains(aStr, strings.ToLower(`where `))
+		strings.Contains(aStr, strings.TrimPrefix(strings.ToLower(aStr), ` `))
 	}
 }
 
-// but matching with regexp is much more reliable than checking if the string just contains where
-var containsWhere = regexp.MustCompile(`(?i:^\s*?where )`)
+// but matching with regexp is much more reliable than checking if the string
+// just contains where
+var containsWhere = regexp.MustCompile(`(?i:^\s*where\s)`)
 
 func Benchmark_regexpMatchWhere(b *testing.B) {
 	for b.Loop() {
 		containsWhere.MatchString(aStr)
 	}
+}
+
+func Fuzz_containsWhere(f *testing.F) {
+	for _, v := range []string{aStr, `where i=1`, `    Where e>0`, `wheRe.Int32 `} {
+		f.Add(v)
+	}
+	f.Fuzz(func(t *testing.T, in string) {
+		t.Logf(`in:%v`, in)
+		if !containsWhere.MatchString(in) {
+			if strings.Contains(aStr, strings.ToLower(`where`)) {
+				t.Errorf(`Expected to match '%s', but it did not!`, in)
+			}
+		}
+	})
+}
+
+// # Examples
+
+func ExampleNewModelx() {
+	// To Select(...) []Users or Get(...) &Users from database.
+	m := modelx.NewModelx[Users]()
+	fmt.Printf(" %#T\n", m)
+	// Output:
+	// *modelx.Modelx[github.com/kberov/rowx/modelx_test.Users]
+	//
+}
+
+func ExampleModelx_Data() {
+
+	type Users struct {
+		LoginName string
+		GroupID   sql.NullInt32
+		ChangedBy sql.NullInt32
+		ID        int32 `rx:"id,auto"`
+	}
+	// []Users to be inserted (or updated, (LoginName is UNIQUE)).
+	var users = []Users{
+		Users{LoginName: "first", ChangedBy: sql.NullInt32{1, true}},
+		Users{LoginName: "the_second", ChangedBy: sql.NullInt32{1, true}},
+	}
+	// Type parameter is guessed from the type of the parameters.
+	m := modelx.NewModelx(users...)
+	for _, u := range m.Data() {
+		fmt.Printf("User.LoginName: %s, User.ChangedBy.Int32: %d\n", u.LoginName, u.ChangedBy.Int32)
+	}
+	// Output:
+	// User.LoginName: first, User.ChangedBy.Int32: 1
+	// User.LoginName: the_second, User.ChangedBy.Int32: 1
+}
+
+func ExampleModelx_Table() {
+	type WishYouWereHere struct {
+		ID       uint32
+		SongName string
+	}
+	f := WishYouWereHere{SongName: `Shine On You Crazy Diamond`}
+	fmt.Printf("TableName: %s\n", modelx.NewModelx(f).Table())
+
+	// Output:
+	// TableName: wish_you_were_here
+	//
 }
