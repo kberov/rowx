@@ -12,9 +12,9 @@ linters:
       enable-all: true
       disable:
         - composites
-        # this can be usefull to enable from time to time
+        # the following can be usefull to enable from time to time
         # https://medium.com/@sebassegros/golang-dealing-with-maligned-structs-9b77bacf4b97
         # https://en.wikipedia.org/wiki/Data_structure_alignment
         # https://go.dev/src/go/types/sizes.go
-        - fieldalignment
+        # - fieldalignment
 

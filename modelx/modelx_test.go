@@ -26,11 +26,13 @@ CREATE TABLE groups (
 id INTEGER PRIMARY KEY AUTOINCREMENT,
 name VARCHAR(100) UNIQUE NOT NULL,
 changed_by INTEGER DEFAULT NULL REFERENCES users(id) ON DELETE SET DEFAULT);
-INSERT INTO groups(id,name, changed_by) VALUES (0,'superadmin',1);
-INSERT INTO groups(id,name, changed_by) VALUES (1,'admins',1);
-INSERT INTO groups(id,name, changed_by) VALUES (2,'guests',1);
-INSERT INTO groups(id,name, changed_by) VALUES (3,'editors',1);
-INSERT INTO groups(id,name, changed_by) VALUES (4,'commenters',1);
+INSERT INTO users(group_id,changed_by,login_name) VALUES (0,0,'superadmin');
+
+INSERT INTO groups(id,name, changed_by) VALUES (0,'superadmin',0);
+INSERT INTO groups(id,name, changed_by) VALUES (1,'admins',NULL);
+INSERT INTO groups(id,name, changed_by) VALUES (2,'guests',NULL);
+INSERT INTO groups(id,name, changed_by) VALUES (3,'editors',NULL);
+INSERT INTO groups(id,name, changed_by) VALUES (4,'commenters',NULL);
 CREATE TABLE user_group (
 --  'ID of the user belonging to the group with group_id.'
   user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -56,7 +58,7 @@ type Users struct {
 }
 
 var users = []Users{
-	Users{LoginName: "first", ChangedBy: sql.NullInt32{1, true}},
+	Users{LoginName: "first", ChangedBy: sql.NullInt32{0, false}},
 	Users{LoginName: "the_second", ChangedBy: sql.NullInt32{1, true}},
 	Users{LoginName: "the_third", ChangedBy: sql.NullInt32{1, true}},
 }
@@ -97,6 +99,11 @@ type UserGroup struct {
 }
 type whereParams struct{ GroupID int32 }
 
+// Note: the order of test matters, because they modify the same data and each
+// next test relies on the current state of the data.
+// TODO: Someday, maybe, make the order of execution not important or use
+// something like TestMain.
+
 func TestTryEmbed(t *testing.T) {
 	reQ := require.New(t)
 	ug := new(UserGroup)
@@ -110,7 +117,7 @@ func TestTryEmbed(t *testing.T) {
 	reQ.NoError(err)
 	rows, errAff := rs.LastInsertId()
 	reQ.NoError(errAff)
-	reQ.Equal(int64(3), rows)
+	reQ.Equal(int64(4), rows)
 	ugDataIns := []UserGroup{
 		UserGroup{UserID: 1, GroupID: 0},
 		UserGroup{UserID: 1, GroupID: 1},
@@ -152,18 +159,23 @@ func TestTryEmbed(t *testing.T) {
 		t.Logf(`err: %s`, err.Error())
 	}
 	t.Logf("Get updated row: %d|%d", row.UserID, row.GroupID)
-	// Delete the inserted users, so the next tests pass and see if "ON DELETE
-	// CASCADE" worked in the database. Also reset the sequence for
-	// AUTOINCREMENT fro table users.
+	// Delete the inserted users, so the next tests pass. "ON DELETE
+	// CASCADE" will delete all the user_group rows. Also reset the sequence for
+	// AUTOINCREMENT for table users, to allow the primary key to start from 1.
 	rs, err = modelx.NewModelx[Users]().Delete(`id>=:id`, map[string]any{`id`: 0})
 	reQ.NoError(err)
 	rows, errAff = rs.RowsAffected()
 	reQ.NoError(errAff)
-	reQ.Equal(int64(3), rows)
-	modelx.DB().MustExec(`UPDATE sqlite_sequence SET seq = 0 WHERE name = 'users'`)
+	reQ.Equal(int64(4), rows)
+	_ = modelx.DB().MustExec(`UPDATE sqlite_sequence SET seq = 0 WHERE name = 'users'`)
+	// ugData, e := ug.Select(`user_id>0`, nil)
+	// t.Logf("See if there is something left in UserGroup:%+v; err: %+v", ugData, e)
 }
 
 func TestNewModelNoData(t *testing.T) {
+	// For subsequent call to Select(...) or Delete(...)....
+	// If no SqlxRows are passed, NewModelx needs a type parameter to know
+	// which type to instantiate.
 	m := modelx.NewModelx[Users]()
 	if m == nil {
 		t.Error("Could not instantiate Modelx")
@@ -171,7 +183,7 @@ func TestNewModelNoData(t *testing.T) {
 }
 
 func TestNewModelWithData(t *testing.T) {
-	// type parameter is guessed from the type of the parameters.
+	// Type parameter is guessed from the type of the parameters.
 	m := modelx.NewModelx(users...)
 	expected := len(users)
 	if i := len(m.Data()); i != expected {
@@ -428,7 +440,6 @@ func TestUpdate(t *testing.T) {
 }
 
 func TestDelete(t *testing.T) {
-	m := modelx.NewModelx[Users]()
 	// TODO: add test case for bind where bind is a struct.
 	tests := []struct {
 		bind        any
@@ -447,6 +458,7 @@ func TestDelete(t *testing.T) {
 			affected: 2,
 		},
 	}
+	m := modelx.NewModelx[Users]()
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			r, e := m.Delete(tc.where, tc.bind)
@@ -497,9 +509,9 @@ func TestWrap(t *testing.T) {
 
 	// test behaviour of tag option `auto`
 	type Foo struct {
-		Foo         uint32 `rx:"bar,auto"`
 		Description string
 		ID          string `id:"id,no_auto"`
+		Foo         uint32 `rx:"bar,auto"`
 	}
 
 	foo := modelx.NewModelx[Foo](
@@ -611,12 +623,23 @@ func Fuzz_containsWhere(f *testing.F) {
 // # Examples
 
 func ExampleNewModelx() {
-	// To Select(...) []Users or Get(...) &Users from database.
+	// If no SqlxRows are passed, NewModelx needs a type parameter to know
+	// which type to instantiate for subsequent call to Select(...) or Delete(...)....
 	m := modelx.NewModelx[Users]()
 	fmt.Printf(" %#T\n", m)
 	// Output:
 	// *modelx.Modelx[github.com/kberov/rowx/modelx_test.Users]
 	//
+}
+
+func ExampleNewModelx_with_param() {
+	// To Inser(...)  Update(...) []Users in the database, no type parameter is
+	// needed.
+	m := modelx.NewModelx(users...)
+	last := m.Data()[len(m.Data())-1]
+	fmt.Printf("Last user: %s", last.LoginName)
+	// Output:
+	// Last user: the_third
 }
 
 func ExampleModelx_Data() {
@@ -666,8 +689,8 @@ func ExampleModelx_SetData() {
 
 func ExampleModelx_Table() {
 	type WishYouWereHere struct {
-		ID       uint32
 		SongName string
+		ID       uint32
 	}
 	f := WishYouWereHere{SongName: `Shine On You Crazy Diamond`}
 	fmt.Printf("TableName: %s\n", modelx.NewModelx(f).Table())
@@ -680,31 +703,22 @@ func ExampleModelx_Table() {
 func ExampleModelx_Columns() {
 
 	type Books struct {
-		ID     uint32
 		Title  string
 		Author string
 		Body   string
+		ID     uint32
 		//...
 	}
 
 	b := Books{Title: `Нова земя`, Author: `Иванъ Вазовъ`, Body: `По стръмната южна урва на Амбарица...`}
-	fmt.Printf("Columns: %+v\n", modelx.NewModelx(b).Columns())
+	// Sorting is done here just to ensure for the example test that the coulmns
+	// will always come in the same order.
+	columns := modelx.NewModelx(b).Columns()
+	slices.Sort(columns)
+	fmt.Printf("Columns: %+v\n", columns)
 
 	// Output:
-	// Columns: [id title author body]
-}
-
-func ExampleModelx_Get() {
-	bindVars := struct{ ID int32 }{ID: 1}
-	u, err := modelx.NewModelx[Users]().Get(`id=:id`, bindVars)
-	if err == nil {
-		fmt.Println(u.LoginName)
-		// Output:
-		// first
-		return
-	}
-	fmt.Printf("err: %s", err)
-
+	// Columns: [author body id title]
 }
 
 func ExampleModelx_Insert() {
@@ -726,13 +740,32 @@ func ExampleModelx_Insert() {
 
 }
 
-func ExampleModelx_Update() {
+func ExampleModelx_Get() {
+	// A long time ago in a galaxy far, far away....
+	// m := modelx.NewModelx(users...)
+	// ...
+	// r, e := m.Insert()
+	// fmt.Printf("sql.Result:%#v; Error:%#v;", r, e)
+	// ...
+	// d, e := modelx.NewModelx[Users]().Select(`id>0`, nil)
+	// fmt.Printf("%+v; e:%+v", d, e)
+	// ...
+	// Now
 
+	bindVars := struct{ ID int32 }{ID: 4}
+	u, err := modelx.NewModelx[Users]().Get(`id=:id`, bindVars)
+	if err == nil {
+		fmt.Println(u.LoginName)
+		// Output:
+		// fourth
+		return
+	}
+	fmt.Printf("err: %s\n", err)
 }
 
 func ExampleModelx_Select() {
 
-	bind := struct{ IDs []uint }{IDs: []uint{1, 2, 3}}
+	bind := struct{ IDs []uint }{IDs: []uint{4, 5}}
 	data, err := modelx.NewModelx[Users]().Select(`id IN(:ids)`, bind)
 	if err != nil {
 		fmt.Println(err.Error())
@@ -741,7 +774,40 @@ func ExampleModelx_Select() {
 		fmt.Printf("%d: %s\n", i+1, u.LoginName)
 	}
 	// Output:
-	// 1: first
-	// 2: the_second
-	// 3: the_third
+	// 1: fourth
+	// 2: fifth
+}
+
+func ExampleModelx_Update() {
+	ug := new(UserGroup)
+	ugData := []UserGroup{
+		UserGroup{UserID: 4, GroupID: 4},
+		UserGroup{UserID: 5, GroupID: 5},
+	}
+	ug.SetData(ugData)
+	_, _ = ug.Insert()
+	data, e := modelx.NewModelx[UserGroup]().Select(`1=1 ORDER BY user_id`, nil)
+	fmt.Printf("%+v: %+v\n", data, e)
+	// Update some rows - move some user(5) to another group(4).
+	ugDataUpd := []UserGroup{
+		UserGroup{
+			UserID: 5,
+			// new (to be updated in the database) value: 2
+			GroupID: 4,
+			Where: whereParams{
+				// existing in the database value: 5
+				GroupID: 5,
+			},
+		},
+	}
+	ug.SetData(ugDataUpd)
+	//							set columns										WHERE struct
+	rs, err := ug.Update([]string{`group_id`}, `user_id=:user_id AND group_id=:where.group_id`)
+	if err != nil {
+		fmt.Println(err.Error())
+	}
+	affected, _ := rs.RowsAffected()
+	fmt.Printf("RowsAffected: %d; err: %+v", affected, err)
+	// Output:
+	// 1
 }

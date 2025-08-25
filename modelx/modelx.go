@@ -1,12 +1,34 @@
 /*
-Package modelx is an object mapper. For struct scanning [sqlx] is used. It
-provides interfaces and a generic data type, and implements the interfaces to
-work easily with sets of database records. The relations' constraints are left
-to be managed by the database and you.
+Package modelx is a minimalistic object to database-rows mapper and wrapper for
+[sqlx]. It provides interfaces and a generic data type, and implements the
+provided interfaces to work easily with sets of database records. The
+relations' constraints are left to be managed by the database and you. This may
+be improved in a future release.
 
 By default the current implementation assumes that the primary key name is
 `ID`. Of course the primary key can be more than one column and with arbitrary
-name. You can mark such fields with tags. Read on.
+name. You can mark such fields with tags. See below.
+
+# Synopsis
+
+	type Users struct {
+		ID        int32
+		LoginName string
+		// ...
+	}
+
+	var users = []Users{
+		Users{LoginName: "first"},
+		Users{LoginName: "the_second"},
+		Users{LoginName: "the_third"},
+	}
+
+	r, e := modelx.NewModelx(users).Insert()
+	if e != nil {
+		fmt.Fprintf(os.Stderr, "Got error from m.Insert(): %s", e.Error())
+		return
+	}
+	//...
 */
 package modelx
 
@@ -140,27 +162,6 @@ type SqlxModelDeleter[R SqlxRows] interface {
 Modelx implements the [SqlxModel] interface and can be used right away or
 embedded (extended) to customise its behaviour for your own needs.
 
-Direct usage:
-
-	type Users struct {
-		ID        int32
-		LoginName string
-		// ...
-	}
-
-	var users = []Users{
-		Users{LoginName: "first"},
-		Users{LoginName: "the_second"},
-		Users{LoginName: "the_third"},
-	}
-
-	m := modelx.NewModelx[Users](users)
-	r, e := m.Insert()
-	if e != nil {
-		fmt.Fprintf(os.Stderr, "Got error from m.Insert(): %s", e.Error())
-		return
-	}
-
 To embed this type, write something similar to the following:
 
 	type MyTableName struct {
@@ -177,6 +178,8 @@ To embed this type, write something similar to the following:
 	// And you may want to implement your own Columns() and Table()...
 */
 type Modelx[R SqlxRows] struct {
+	// structMap is an index of field metadata for the underlying struct R.
+	structMap *reflectx.StructMap
 	/*
 		table allows to set explicitly the table name for this model. Otherwise
 		it is guessed and set from the type of the first element of Data slice
@@ -190,14 +193,12 @@ type Modelx[R SqlxRows] struct {
 		or updated.
 	*/
 	data []R
-	// structMap is an index of field metadata for the underlying struct R.
-	structMap *reflectx.StructMap
 }
 
 /*
 NewModelx returns a new instance of a table model with optionally provided data
 rows as a variadic parameter. Providing the specific type parameter to
-instantiate is mandatory.
+instantiate is mandatory if it cannot be inferred from the variadic parameter.
 */
 func NewModelx[R SqlxRows](rows ...R) SqlxModel[R] {
 	m := &Modelx[R]{data: rows}
@@ -308,7 +309,9 @@ returns [sql.Result] and [error]. The value for the autoincremented primary key
 (usually ID column) is left to be set by the database.
 
 If the records to be inserted are more than one, the data is inserted in a
-transaction. If there are no records to be inserted, it panics.
+transaction. [sql.Result.RowsAffected] will always return 1, because every row
+is inserted in its own statement. This may change in a future release. If there
+are no records to be inserted, [Modelx.Insert] panics.
 
 If you need to insert an [SqlxRows] structure with a specific value for ID, add a
 tag to the ID column `rx:id,no_auto` or use directly [sqlx].
@@ -370,11 +373,11 @@ func (m *Modelx[R]) Insert() (sql.Result, error) {
 }
 
 /*
-Select prepares and executes a SELECT statement. Selected records can be used
-with [SqlxModel.Data]. `limitAndOffset` is expected to be used as a variadic
-parameter. If passed, it is expected to consist of two values limit and offset
-- in that order. The default value for LIMIT can be set by [DefaultLimit].
-OFFSET is 0 by default.
+Select prepares, executes a SELECT statement and returns the collected result
+as a slice. Selected records can also be used with [Modelx.Data].
+`limitAndOffset` is expected to be used as a variadic parameter. If passed, it
+is expected to consist of two values limit and offset - in that order. The
+default value for LIMIT can be set by [DefaultLimit]. OFFSET is 0 by default.
 */
 func (m *Modelx[R]) Select(where string, bindData any, limitAndOffset ...int) ([]R, error) {
 	if len(limitAndOffset) == 0 {
@@ -387,7 +390,6 @@ func (m *Modelx[R]) Select(where string, bindData any, limitAndOffset ...int) ([
 		bindData = struct{}{}
 	}
 	query := m.renderSelectTemplate(where, limitAndOffset)
-	Logger.Debugf("Rendered Select query : %s", query)
 	m.data = make([]R, 1, limitAndOffset[0])
 
 	q, args, err := namedInRebind(query, bindData)
