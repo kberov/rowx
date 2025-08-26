@@ -22,11 +22,13 @@ id INTEGER PRIMARY KEY AUTOINCREMENT,
 login_name varchar(100) UNIQUE,
 group_id INTEGER DEFAULT NULL REFERENCES groups(id),
 changed_by INTEGER DEFAULT NULL REFERENCES users(id) ON DELETE SET DEFAULT);
+
+INSERT INTO users(id,group_id,changed_by,login_name) VALUES (0,0,0,'superadmin');
+
 CREATE TABLE groups (
 id INTEGER PRIMARY KEY AUTOINCREMENT,
 name VARCHAR(100) UNIQUE NOT NULL,
 changed_by INTEGER DEFAULT NULL REFERENCES users(id) ON DELETE SET DEFAULT);
-INSERT INTO users(group_id,changed_by,login_name) VALUES (0,0,'superadmin');
 
 INSERT INTO groups(id,name, changed_by) VALUES (0,'superadmin',0);
 INSERT INTO groups(id,name, changed_by) VALUES (1,'admins',NULL);
@@ -40,13 +42,11 @@ CREATE TABLE user_group (
   group_id INTEGER REFERENCES groups(id) ON DELETE CASCADE,
   PRIMARY KEY(user_id, group_id)
 );
-
 CREATE TABLE foo(
 	bar INTEGER PRIMARY KEY AUTOINCREMENT,
 	description VARCHAR(255) NOT NULL DEFAULT '',
 	id VARCHAR(56) UNIQUE NOT NULL DEFAULT ''
 );
-
 PRAGMA foreign_keys = ON;
 `
 
@@ -117,7 +117,7 @@ func TestTryEmbed(t *testing.T) {
 	reQ.NoError(err)
 	rows, errAff := rs.LastInsertId()
 	reQ.NoError(errAff)
-	reQ.Equal(int64(4), rows)
+	reQ.Equal(int64(3), rows)
 	ugDataIns := []UserGroup{
 		UserGroup{UserID: 1, GroupID: 0},
 		UserGroup{UserID: 1, GroupID: 1},
@@ -588,6 +588,19 @@ func expectPanic(t *testing.T, f func()) {
 	f()
 }
 
+func TestResetDB(t *testing.T) {
+	drops := `
+PRAGMA foreign_keys = OFF;
+DROP TABLE users;
+DROP TABLE user_group;
+DROP TABLE groups;
+DROP TABLE foo;
+`
+	multiExec(modelx.DB(), drops)
+	multiExec(modelx.DB(), schema)
+	t.Log(`Database is reset.`)
+}
+
 var aStr = `           WHERE bar=1`
 
 func Benchmark_stringContainsWhere(b *testing.B) {
@@ -621,7 +634,6 @@ func Fuzz_containsWhere(f *testing.F) {
 }
 
 // # Examples
-
 func ExampleNewModelx() {
 	// If no SqlxRows are passed, NewModelx needs a type parameter to know
 	// which type to instantiate for subsequent call to Select(...) or Delete(...)....
@@ -722,22 +734,35 @@ func ExampleModelx_Columns() {
 }
 
 func ExampleModelx_Insert() {
-	usrs := []Users{
-		Users{LoginName: `fourth`},
-		Users{LoginName: `fifth`},
-	}
 
-	r, err := modelx.NewModelx[Users](usrs...).Insert()
+	_, e := modelx.NewModelx(users...).Insert()
+	if e != nil {
+		println(`Error inserting new users:`, e)
+	}
+	// udata, e := modelx.NewModelx[Users]().Select(`id>=0`, nil)
+	// fmt.Printf("Selected []Users %+v; %+v\n", udata, e)
+	groupRs, e := modelx.NewModelx[Groups](Groups{Name: `fifth`}).Insert()
+	if e != nil {
+		println(`Error inserting new group:`, e)
+	}
+	lastGroupID, _ := groupRs.LastInsertId()
+	fmt.Printf("Inserted new group with id: %d\n", lastGroupID)
+
+	usrs := []Users{
+		Users{LoginName: `fourth`, GroupID: sql.NullInt32{Int32: 4, Valid: true}},
+		Users{LoginName: `fifth`, GroupID: sql.NullInt32{Int32: 5, Valid: true}},
+	}
+	r, err := modelx.NewModelx(usrs...).Insert()
 
 	if err == nil {
 		last, _ := r.LastInsertId()
-		fmt.Println(last)
+		fmt.Println(`Last inserted user id:`, last)
 		// Output:
-		//  5
+		// Inserted new group with id: 5
+		// Last inserted user id: 5
 		return
 	}
 	fmt.Printf("err: %s", err)
-
 }
 
 func ExampleModelx_Get() {
@@ -751,7 +776,6 @@ func ExampleModelx_Get() {
 	// fmt.Printf("%+v; e:%+v", d, e)
 	// ...
 	// Now
-
 	bindVars := struct{ ID int32 }{ID: 4}
 	u, err := modelx.NewModelx[Users]().Get(`id=:id`, bindVars)
 	if err == nil {
@@ -779,35 +803,51 @@ func ExampleModelx_Select() {
 }
 
 func ExampleModelx_Update() {
+	type whereBind struct{ GroupID uint32 }
+	type UserGroup struct {
+		modelx.Modelx[UserGroup]
+		UserID  uint32
+		GroupID uint32
+		// Used only as bind parameters during UPDATE and maybe in other
+		// queries. Must be a named struct, known at compile time!
+		Where whereBind `rx:"where,-"` // - : Do not treat this field as column.
+	}
+
 	ug := new(UserGroup)
 	ugData := []UserGroup{
 		UserGroup{UserID: 4, GroupID: 4},
 		UserGroup{UserID: 5, GroupID: 5},
 	}
 	ug.SetData(ugData)
-	_, _ = ug.Insert()
-	data, e := modelx.NewModelx[UserGroup]().Select(`1=1 ORDER BY user_id`, nil)
-	fmt.Printf("%+v: %+v\n", data, e)
+	_, e := ug.Insert()
+	if e != nil {
+		fmt.Println("Error inserting into user_group:", e.Error())
+	}
+
 	// Update some rows - move some user(5) to another group(4).
 	ugDataUpd := []UserGroup{
 		UserGroup{
 			UserID: 5,
 			// new (to be updated in the database) value: 2
 			GroupID: 4,
-			Where: whereParams{
+			Where: whereBind{
 				// existing in the database value: 5
 				GroupID: 5,
 			},
 		},
 	}
 	ug.SetData(ugDataUpd)
-	//							set columns										WHERE struct
+	//                    set columns                                      the Where.GroupID field
 	rs, err := ug.Update([]string{`group_id`}, `user_id=:user_id AND group_id=:where.group_id`)
 	if err != nil {
 		fmt.Println(err.Error())
 	}
 	affected, _ := rs.RowsAffected()
 	fmt.Printf("RowsAffected: %d; err: %+v", affected, err)
+
 	// Output:
-	// 1
+	// RowsAffected: 1; err: <nil>
 }
+
+/*
+ */

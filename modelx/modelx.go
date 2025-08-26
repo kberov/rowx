@@ -476,7 +476,7 @@ of the slice of passed [SqlxRows] to [NewModelx] or to [Modelx.SetData].
 
 This is somehow problematic with named queries. What if we want to `SET
 group_id=1 WHERE group_id=2. How to differntiate between columns to be updated
-and parameters for the WHERE clause?  We need differned name for the bind
+and parameters for the WHERE clause?  We need different name for the bind
 parameter. Something like `:where.group_id` to hold the existing value in the
 database. Or maybe use a nested select statement in the WHERE clause to match
 the needed row for update by primary key column. A solution is to have a nested
