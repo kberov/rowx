@@ -779,6 +779,16 @@ func ExampleModelx_Select() {
 }
 
 func ExampleModelx_Update() {
+	type whereBind struct{ GroupID uint32 }
+	type UserGroup struct {
+		modelx.Modelx[UserGroup]
+		UserID  uint32
+		GroupID uint32
+		// Used only as bind parameters during UPDATE and maybe other queries. Must
+		// be a named struct, known at compile time!
+		Where whereBind `rx:"where,-"` // - : Do not treat this field as column.
+	}
+
 	ug := new(UserGroup)
 	ugData := []UserGroup{
 		UserGroup{UserID: 4, GroupID: 4},
@@ -786,15 +796,13 @@ func ExampleModelx_Update() {
 	}
 	ug.SetData(ugData)
 	_, _ = ug.Insert()
-	data, e := modelx.NewModelx[UserGroup]().Select(`1=1 ORDER BY user_id`, nil)
-	fmt.Printf("%+v: %+v\n", data, e)
 	// Update some rows - move some user(5) to another group(4).
 	ugDataUpd := []UserGroup{
 		UserGroup{
 			UserID: 5,
 			// new (to be updated in the database) value: 2
 			GroupID: 4,
-			Where: whereParams{
+			Where: whereBind{
 				// existing in the database value: 5
 				GroupID: 5,
 			},
@@ -808,6 +816,8 @@ func ExampleModelx_Update() {
 	}
 	affected, _ := rs.RowsAffected()
 	fmt.Printf("RowsAffected: %d; err: %+v", affected, err)
+	data, e := modelx.NewModelx[UserGroup]().Select(`1=1 ORDER BY user_id`, nil)
+	fmt.Printf("%+v: %+v\n", data, e)
 	// Output:
 	// 1
 }
