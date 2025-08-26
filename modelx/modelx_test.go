@@ -1,14 +1,18 @@
 package modelx_test
 
 import (
+	"crypto/sha256"
 	"database/sql"
 	"fmt"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/kberov/rowx/modelx"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/stretchr/testify/require"
 )
 
 var schema = `
@@ -22,40 +26,47 @@ CREATE TABLE groups (
 id INTEGER PRIMARY KEY AUTOINCREMENT,
 name VARCHAR(100) UNIQUE NOT NULL,
 changed_by INTEGER DEFAULT NULL REFERENCES users(id) ON DELETE SET DEFAULT);
-INSERT INTO groups(id,name, changed_by) VALUES (0,'superadmin',1);
-INSERT INTO groups(id,name, changed_by) VALUES (1,'admins',1);
-INSERT INTO groups(id,name, changed_by) VALUES (2,'editors',1);
-INSERT INTO groups(id,name, changed_by) VALUES (3,'guests',1);
-INSERT INTO groups(id,name, changed_by) VALUES (4,'commenters',1);
+INSERT INTO users(group_id,changed_by,login_name) VALUES (0,0,'superadmin');
+
+INSERT INTO groups(id,name, changed_by) VALUES (0,'superadmin',0);
+INSERT INTO groups(id,name, changed_by) VALUES (1,'admins',NULL);
+INSERT INTO groups(id,name, changed_by) VALUES (2,'guests',NULL);
+INSERT INTO groups(id,name, changed_by) VALUES (3,'editors',NULL);
+INSERT INTO groups(id,name, changed_by) VALUES (4,'commenters',NULL);
 CREATE TABLE user_group (
 --  'ID of the user belonging to the group with group_id.'
   user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
 --  'ID of the group to which the user with user_id belongs.'
   group_id INTEGER REFERENCES groups(id) ON DELETE CASCADE,
   PRIMARY KEY(user_id, group_id)
-)
+);
+
+CREATE TABLE foo(
+	bar INTEGER PRIMARY KEY AUTOINCREMENT,
+	description VARCHAR(255) NOT NULL DEFAULT '',
+	id VARCHAR(56) UNIQUE NOT NULL DEFAULT ''
+);
+
 PRAGMA foreign_keys = ON;
 `
 
 type Users struct {
-	*modelx.Rowx[modelx.SqlxRows]
 	LoginName string
 	GroupID   sql.NullInt32
 	ChangedBy sql.NullInt32
-	ID        int32
+	ID        int32 `rx:"id,auto"`
 }
 
 var users = []Users{
-	Users{LoginName: "first", ChangedBy: sql.NullInt32{1, true}},
+	Users{LoginName: "first", ChangedBy: sql.NullInt32{0, false}},
 	Users{LoginName: "the_second", ChangedBy: sql.NullInt32{1, true}},
 	Users{LoginName: "the_third", ChangedBy: sql.NullInt32{1, true}},
 }
 
 type Groups struct {
-	*modelx.Rowx[modelx.SqlxRows]
 	Name      string
 	ChangedBy sql.NullInt32
-	ID        int32
+	ID        int32 `rx:"id,auto"`
 }
 
 // Stollen from sqlx_test.go
@@ -78,7 +89,93 @@ func init() {
 	multiExec(modelx.DB(), schema)
 }
 
+type UserGroup struct {
+	modelx.Modelx[UserGroup]
+	UserID  int32
+	GroupID int32
+	// Used only as bind parameters during UPDATE and maybe other queries. Must
+	// be a named struct, known at compile time!
+	Where whereParams `rx:"where,-"` // - : Do not treat this field as column.
+}
+type whereParams struct{ GroupID int32 }
+
+// Note: the order of test matters, because they modify the same data and each
+// next test relies on the current state of the data.
+// TODO: Someday, maybe, make the order of execution not important or use
+// something like TestMain.
+
+func TestTryEmbed(t *testing.T) {
+	reQ := require.New(t)
+	ug := new(UserGroup)
+	reQ.Equal(`user_group`, ug.Table())
+	expectedCols := []string{`user_id`, `group_id`}
+	slices.Sort(expectedCols)
+	slices.Sort(ug.Columns())
+	reQ.Equal(expectedCols, ug.Columns())
+	// Insert some users (the usual way) to meet the foreign key constraint.
+	rs, err := modelx.NewModelx[Users](users...).Insert()
+	reQ.NoError(err)
+	rows, errAff := rs.LastInsertId()
+	reQ.NoError(errAff)
+	reQ.Equal(int64(4), rows)
+	ugDataIns := []UserGroup{
+		UserGroup{UserID: 1, GroupID: 0},
+		UserGroup{UserID: 1, GroupID: 1},
+		UserGroup{UserID: 2, GroupID: 2},
+		UserGroup{UserID: 3, GroupID: 3},
+		UserGroup{UserID: 1, GroupID: 4},
+		UserGroup{UserID: 2, GroupID: 4},
+		UserGroup{UserID: 3, GroupID: 4},
+	}
+	ug.SetData(ugDataIns)
+	rs, err = ug.Insert()
+	reQ.NoError(err)
+	rows, errAff = rs.LastInsertId()
+	reQ.NoError(errAff)
+	reQ.Equal(int64(7), rows)
+	// Update some rows - move some user(3) to another group(2).
+	ugDataUpd := []UserGroup{
+		UserGroup{
+			UserID: 3,
+			// new (to be updated in the database) value: 2
+			GroupID: 2, Where: whereParams{
+				// existing in the database value: 4
+				GroupID: 4,
+			},
+		},
+	}
+	ug.SetData(ugDataUpd)
+	//							set columns										WHERE struct
+	rs, err = ug.Update([]string{`group_id`}, `user_id=:user_id AND group_id=:where.group_id`)
+	reQ.NoError(err)
+	rows, errAff = rs.RowsAffected()
+	reQ.NoError(errAff)
+	reQ.Equal(int64(1), rows)
+	// Get the row to see what we did.
+	row, err := ug.Get(
+		`user_id = :uid AND group_id = :gid`,
+		map[string]any{`uid`: 3, `gid`: ug.Data()[0].Where.GroupID})
+	if err != nil {
+		t.Logf(`err: %s`, err.Error())
+	}
+	t.Logf("Get updated row: %d|%d", row.UserID, row.GroupID)
+	// Delete the inserted users, so the next tests pass. "ON DELETE
+	// CASCADE" will delete all the user_group rows. Also reset the sequence for
+	// AUTOINCREMENT for table users, to allow the primary key to start from 1.
+	rs, err = modelx.NewModelx[Users]().Delete(`id>=:id`, map[string]any{`id`: 0})
+	reQ.NoError(err)
+	rows, errAff = rs.RowsAffected()
+	reQ.NoError(errAff)
+	reQ.Equal(int64(4), rows)
+	_ = modelx.DB().MustExec(`UPDATE sqlite_sequence SET seq = 0 WHERE name = 'users'`)
+	// ugData, e := ug.Select(`user_id>0`, nil)
+	// t.Logf("See if there is something left in UserGroup:%+v; err: %+v", ugData, e)
+}
+
 func TestNewModelNoData(t *testing.T) {
+	// For subsequent call to Select(...) or Delete(...)....
+	// If no SqlxRows are passed, NewModelx needs a type parameter to know
+	// which type to instantiate.
 	m := modelx.NewModelx[Users]()
 	if m == nil {
 		t.Error("Could not instantiate Modelx")
@@ -86,7 +183,7 @@ func TestNewModelNoData(t *testing.T) {
 }
 
 func TestNewModelWithData(t *testing.T) {
-	// type parameter is guessed from the type of the parameters.
+	// Type parameter is guessed from the type of the parameters.
 	m := modelx.NewModelx(users...)
 	expected := len(users)
 	if i := len(m.Data()); i != expected {
@@ -96,7 +193,7 @@ func TestNewModelWithData(t *testing.T) {
 
 func TestTable(t *testing.T) {
 	type AVeryLongAndComplexTableName struct {
-		*modelx.Rowx[modelx.SqlxRows]
+		ID int32
 	}
 	m := &modelx.Modelx[AVeryLongAndComplexTableName]{}
 	if table := m.Table(); table != `a_very_long_and_complex_table_name` {
@@ -131,27 +228,23 @@ func TestColumns(t *testing.T) {
 }
 
 func TestSingleInsert(t *testing.T) {
+	reQ := require.New(t)
 	m := modelx.NewModelx[Users](users[0])
+
 	r, e := m.Insert()
-	if e != nil {
-		t.Errorf("Got error from m.Insert(): %v", e)
-		return
-	}
-	if id, e := r.LastInsertId(); e != nil {
-		t.Errorf("Error: %v", e)
-	} else {
-		t.Logf("LastInsertId: %d", id)
-	}
-	if r, e := r.RowsAffected(); e != nil {
-		t.Errorf("Error: %v", e)
-	} else {
-		t.Logf("RowsAffected: %d", r)
-	}
+	reQ.NoErrorf(e, "Got error from m.Insert(): %v", e)
+
+	id, e := r.LastInsertId()
+	reQ.NoErrorf(e, "Error: %v", e)
+	t.Logf("LastInsertId: %d", id)
+
+	rows, e := r.RowsAffected()
+	reQ.NoErrorf(e, "Error: %v", e)
+	t.Logf("RowsAffected: %d", rows)
+
 	u := &Users{}
 	_ = modelx.DB().Get(u, `SELECT * FROM users WHERE id=?`, 1)
-	if u.LoginName != users[0].LoginName {
-		t.Errorf("Expected LoginName: %s. Got: %s!", users[0].LoginName, u.LoginName)
-	}
+	reQ.Equalf(users[0].LoginName, u.LoginName, "Expected LoginName: %s. Got: %s!", users[0].LoginName, u.LoginName)
 	t.Logf(`First selected user: %#v`, u)
 }
 
@@ -159,9 +252,7 @@ func TestMultyInsert(t *testing.T) {
 	// t.Logf("Starting from second user: %#v;", users[1:])
 	m := modelx.NewModelx(users[1:]...)
 	r, e := m.Insert()
-	if e != nil {
-		t.Errorf("sql.Result:%#v; Error:%#v;", r, e)
-	}
+	require.NoErrorf(t, e, "sql.Result:%#v; Error:%#v;", r, e)
 	t.Logf("sql.Result:%#v; Error:%#v;", r, e)
 }
 
@@ -201,7 +292,7 @@ func TestSelect(t *testing.T) {
 		{
 			// Does a SELECT with WHERE id<:id
 			name:     `WithWhere`,
-			where:    `WHERE id >:id`,
+			where:    `id >:id`,
 			bindData: map[string]any{`id`: 1},
 			lastID:   3,
 		},
@@ -215,7 +306,7 @@ func TestSelect(t *testing.T) {
 		},
 		{
 			name:          `SelectError`,
-			where:         `WHERE id=:id`,
+			where:         `id=:id`,
 			bindData:      map[string]any{},
 			lastID:        3,
 			expectedError: true,
@@ -223,13 +314,13 @@ func TestSelect(t *testing.T) {
 		},
 		{
 			name:     `SelectIN`,
-			where:    `WHERE id IN(:ids)`,
+			where:    `id IN(:ids)`,
 			bindData: map[string]any{`ids`: []int{1, 2, 3}},
 			lastID:   3,
 		},
 		{
 			name:     `SelectOrderByDesc`,
-			where:    `WHERE id IN(:ids) ORDER BY id DESC`,
+			where:    `id IN(:ids) ORDER BY id DESC`,
 			bindData: map[string]any{`ids`: []int{1, 2, 3}},
 			lastID:   1,
 		},
@@ -268,8 +359,8 @@ func TestUpdate(t *testing.T) {
 	}{
 		{
 			name:        `One`,
-			where:       `WHERE id=:id`,
-			selectWhere: `WHERE id=:id`,
+			where:       `id=:id`,
+			selectWhere: `id=:id`,
 			Modelx: modelx.NewModelx(Users{LoginName: `first_updated`, ID: 1,
 				GroupID: sql.NullInt32{Valid: true, Int32: 0}}),
 			affected:   1,
@@ -280,8 +371,8 @@ func TestUpdate(t *testing.T) {
 		{
 			name: `ManyUniqueConstraintFail`,
 			// this WHERE clause will produce UNIQUE CONSTRAINT Error, because login_name is UNIQUE.
-			where:       `WHERE id IN(SELECT id FROM users WHERE ID>1)`,
-			selectWhere: `WHERE id IN(SELECT id FROM users WHERE ID>1)`,
+			where:       `id IN(SELECT id FROM users WHERE ID>1)`,
+			selectWhere: `id IN(SELECT id FROM users WHERE ID>1)`,
 			Modelx: modelx.NewModelx(
 				Users{LoginName: `second_updated`, ID: 2},
 				Users{LoginName: `third_updated`, ID: 3, GroupID: sql.NullInt32{Valid: true, Int32: 2}},
@@ -293,7 +384,7 @@ func TestUpdate(t *testing.T) {
 		{
 			name: `ManyUniqueConstraintOK`,
 			// this WHERE clause will NOT produce UNIQUE CONSTRAINT Error, because id is PRIMARY KEY.
-			where: `WHERE id = :id`,
+			where: `id = :id`,
 			Modelx: modelx.NewModelx(
 				Users{LoginName: `second_updated_ok`, ID: 2, GroupID: sql.NullInt32{Valid: true, Int32: 2}},
 				Users{LoginName: `third_updated_ok`, ID: 3, GroupID: sql.NullInt32{Valid: true, Int32: 3}},
@@ -301,7 +392,7 @@ func TestUpdate(t *testing.T) {
 			affected:    2,
 			columns:     []string{`login_name`, `GroupID`},
 			dbError:     false,
-			selectWhere: `WHERE id IN(:id)`,
+			selectWhere: `id IN(:id)`,
 			selectBind:  map[string]any{`id`: []any{2, 3}},
 		},
 	}
@@ -349,7 +440,6 @@ func TestUpdate(t *testing.T) {
 }
 
 func TestDelete(t *testing.T) {
-	m := modelx.NewModelx[Users]()
 	// TODO: add test case for bind where bind is a struct.
 	tests := []struct {
 		bind        any
@@ -358,16 +448,17 @@ func TestDelete(t *testing.T) {
 	}{
 		{
 			name:     `One`,
-			where:    `WHERE id=:some_id`,
+			where:    `id=:some_id`,
 			bind:     map[string]any{`some_id`: 1},
 			affected: 1,
 		},
 		{
 			name:     `Many`,
-			where:    `WHERE id > 1`,
+			where:    `id > 1`,
 			affected: 2,
 		},
 	}
+	m := modelx.NewModelx[Users]()
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			r, e := m.Delete(tc.where, tc.bind)
@@ -394,39 +485,55 @@ type myModel[R modelx.SqlxRows] struct {
 func (m *myModel[R]) Data() []R {
 	return m.data
 }
+
 func (m *myModel[R]) mySelect() ([]R, error) {
 	modelx.Logger.Debugf(`executing SELECT from an extending type: %T`, m)
 	err := modelx.DB().Select(&m.data, `SELECT * from groups limit 100`)
 	return m.data, err
 }
-func TestEmbed(t *testing.T) {
+
+func TestWrap(t *testing.T) {
+	reQ := require.New(t)
 	// ---
 	mm := &myModel[Groups]{}
-	if mm.Table() != `groups` {
-		t.Errorf(`Wrong table for myModel: %s`, mm.Table())
-	}
-	mm = new(myModel[Groups])
-	if mm.Table() != `groups` {
-		t.Errorf(`Wrong table for myModel: %s`, mm.Table())
-		return
-	}
-	data, err := mm.Select(`WHERE id >:id`, modelx.SQLMap{`id`: 1})
-	if err != nil {
-		t.Errorf(`Unexpected error:%#v`, err)
-	}
-	if len(data) != 3 {
-		t.Errorf(`Expected 3 rows from the database but got %d.`, len(data))
-	}
+	reQ.Equalf(`groups`, mm.Table(), `Wrong table for myModel: %s`, mm.Table())
+
+	data, err := mm.Select(`id >:id`, modelx.SQLMap{`id`: 1})
+	reQ.NoError(err, `Unexpected error:%#v`, err)
+	reQ.Equalf(3, len(data), `Expected 3 rows from the database but got %d.`, len(data))
+
 	m := &myModel[Groups]{}
 	data, _ = m.mySelect()
+	reQ.Equalf(5, len(data), `Expected 5 rows from the database but got %d.`, len(data))
+	reQ.Equalf(data[0], m.Data()[0], `m.Data() and data should point to the same data!`)
 
-	if len(data) != 5 {
-		t.Errorf(`Expected 5 rows from the database but got %d.`, len(data))
+	// test behaviour of tag option `auto`
+	type Foo struct {
+		Description string
+		ID          string `id:"id,no_auto"`
+		Foo         uint32 `rx:"bar,auto"`
 	}
-	if data[0] != m.Data()[0] {
-		t.Error(`m.Data() and data should point to the same data!`)
+
+	foo := modelx.NewModelx[Foo](
+		Foo{Description: `first record`},
+		Foo{Description: `second record`},
+	)
+	for i, f := range foo.Data() {
+		f.ID = fmt.Sprintf("%x", sha256.Sum224([]byte(f.Description)))
+		foo.Data()[i] = f
 	}
-	t.Logf("Extending object's m.Data(): %#v", m.Data())
+	_, err = foo.Insert()
+	reQ.NoError(err)
+	// Using the keyword WHERE is optional, but can be written even if only for
+	// expressiveness.
+	firstFoo, err := foo.Get(`WHERE bar=1`)
+	reQ.NoError(err)
+	d, e := modelx.NewModelx[Foo]().Select(`id IN(:ids)`, map[string]any{`ids`: []int32{1, 2}})
+	t.Logf("%+v, %v", d, e)
+	reQ.Equal(`first record`, firstFoo.Description)
+	secondFoo, err := foo.Get(`bar=2`)
+	reQ.NoError(err)
+	reQ.Equal(`second record`, secondFoo.Description)
 }
 
 func TestPanics(t *testing.T) {
@@ -439,6 +546,13 @@ func TestPanics(t *testing.T) {
 			fn: func() {
 				g := modelx.NewModelx[Groups]()
 				_, _ = g.Insert()
+			},
+		},
+		{
+			name: `UpdateNoData`,
+			fn: func() {
+				g := modelx.NewModelx[Groups]()
+				_, _ = g.Update(g.Columns(), `1`)
 			},
 		},
 		{
@@ -472,4 +586,228 @@ func expectPanic(t *testing.T, f func()) {
 		}
 	}()
 	f()
+}
+
+var aStr = `           WHERE bar=1`
+
+func Benchmark_stringContainsWhere(b *testing.B) {
+	for b.Loop() {
+		strings.Contains(aStr, strings.TrimPrefix(strings.ToLower(aStr), ` `))
+	}
+}
+
+// but matching with regexp is much more reliable than checking if the string
+// just contains where
+var containsWhere = regexp.MustCompile(`(?i:^\s*where\s)`)
+
+func Benchmark_regexpMatchWhere(b *testing.B) {
+	for b.Loop() {
+		containsWhere.MatchString(aStr)
+	}
+}
+
+func Fuzz_containsWhere(f *testing.F) {
+	for _, v := range []string{aStr, `where i=1`, `    Where e>0`, `wheRe.Int32 `} {
+		f.Add(v)
+	}
+	f.Fuzz(func(t *testing.T, in string) {
+		t.Logf(`in:%v`, in)
+		if !containsWhere.MatchString(in) {
+			if strings.Contains(aStr, strings.ToLower(`where`)) {
+				t.Errorf(`Expected to match '%s', but it did not!`, in)
+			}
+		}
+	})
+}
+
+// # Examples
+
+func ExampleNewModelx() {
+	// If no SqlxRows are passed, NewModelx needs a type parameter to know
+	// which type to instantiate for subsequent call to Select(...) or Delete(...)....
+	m := modelx.NewModelx[Users]()
+	fmt.Printf(" %#T\n", m)
+	// Output:
+	// *modelx.Modelx[github.com/kberov/rowx/modelx_test.Users]
+	//
+}
+
+func ExampleNewModelx_with_param() {
+	// To Inser(...)  Update(...) []Users in the database, no type parameter is
+	// needed.
+	m := modelx.NewModelx(users...)
+	last := m.Data()[len(m.Data())-1]
+	fmt.Printf("Last user: %s", last.LoginName)
+	// Output:
+	// Last user: the_third
+}
+
+func ExampleModelx_Data() {
+
+	type Users struct {
+		LoginName string
+		GroupID   sql.NullInt32
+		ChangedBy sql.NullInt32
+		ID        int32 `rx:"id,auto"`
+	}
+	// []Users to be inserted (or updated, (LoginName is UNIQUE)).
+	var users = []Users{
+		Users{LoginName: "first", ChangedBy: sql.NullInt32{1, true}},
+		Users{LoginName: "the_second", ChangedBy: sql.NullInt32{1, true}},
+	}
+	// Type parameter is guessed from the type of the parameters.
+	m := modelx.NewModelx(users...)
+	for _, u := range m.Data() {
+		fmt.Printf("User.LoginName: %s, User.ChangedBy.Int32: %d\n", u.LoginName, u.ChangedBy.Int32)
+	}
+	// Output:
+	// User.LoginName: first, User.ChangedBy.Int32: 1
+	// User.LoginName: the_second, User.ChangedBy.Int32: 1
+}
+
+func ExampleModelx_SetData() {
+
+	ugDataIns := []UserGroup{
+		UserGroup{UserID: 1, GroupID: 1},
+		UserGroup{UserID: 2, GroupID: 2},
+		UserGroup{UserID: 3, GroupID: 3},
+		UserGroup{UserID: 1, GroupID: 4},
+		UserGroup{UserID: 2, GroupID: 4},
+	}
+	ug := modelx.NewModelx[UserGroup]().SetData(ugDataIns)
+	for i, row := range ug.Data() {
+		fmt.Printf("%d: UserID: %d; GroupID: %d\n", i+1, row.UserID, row.GroupID)
+	}
+	// Output:
+	//
+	// 1: UserID: 1; GroupID: 1
+	// 2: UserID: 2; GroupID: 2
+	// 3: UserID: 3; GroupID: 3
+	// 4: UserID: 1; GroupID: 4
+	// 5: UserID: 2; GroupID: 4
+}
+
+func ExampleModelx_Table() {
+	type WishYouWereHere struct {
+		SongName string
+		ID       uint32
+	}
+	f := WishYouWereHere{SongName: `Shine On You Crazy Diamond`}
+	fmt.Printf("TableName: %s\n", modelx.NewModelx(f).Table())
+
+	// Output:
+	// TableName: wish_you_were_here
+	//
+}
+
+func ExampleModelx_Columns() {
+
+	type Books struct {
+		Title  string
+		Author string
+		Body   string
+		ID     uint32
+		//...
+	}
+
+	b := Books{Title: `Нова земя`, Author: `Иванъ Вазовъ`, Body: `По стръмната южна урва на Амбарица...`}
+	// Sorting is done here just to ensure for the example test that the coulmns
+	// will always come in the same order.
+	columns := modelx.NewModelx(b).Columns()
+	slices.Sort(columns)
+	fmt.Printf("Columns: %+v\n", columns)
+
+	// Output:
+	// Columns: [author body id title]
+}
+
+func ExampleModelx_Insert() {
+	usrs := []Users{
+		Users{LoginName: `fourth`},
+		Users{LoginName: `fifth`},
+	}
+
+	r, err := modelx.NewModelx[Users](usrs...).Insert()
+
+	if err == nil {
+		last, _ := r.LastInsertId()
+		fmt.Println(last)
+		// Output:
+		//  5
+		return
+	}
+	fmt.Printf("err: %s", err)
+
+}
+
+func ExampleModelx_Get() {
+	// A long time ago in a galaxy far, far away....
+	// m := modelx.NewModelx(users...)
+	// ...
+	// r, e := m.Insert()
+	// fmt.Printf("sql.Result:%#v; Error:%#v;", r, e)
+	// ...
+	// d, e := modelx.NewModelx[Users]().Select(`id>0`, nil)
+	// fmt.Printf("%+v; e:%+v", d, e)
+	// ...
+	// Now
+
+	bindVars := struct{ ID int32 }{ID: 4}
+	u, err := modelx.NewModelx[Users]().Get(`id=:id`, bindVars)
+	if err == nil {
+		fmt.Println(u.LoginName)
+		// Output:
+		// fourth
+		return
+	}
+	fmt.Printf("err: %s\n", err)
+}
+
+func ExampleModelx_Select() {
+
+	bind := struct{ IDs []uint }{IDs: []uint{4, 5}}
+	data, err := modelx.NewModelx[Users]().Select(`id IN(:ids)`, bind)
+	if err != nil {
+		fmt.Println(err.Error())
+	}
+	for i, u := range data {
+		fmt.Printf("%d: %s\n", i+1, u.LoginName)
+	}
+	// Output:
+	// 1: fourth
+	// 2: fifth
+}
+
+func ExampleModelx_Update() {
+	ug := new(UserGroup)
+	ugData := []UserGroup{
+		UserGroup{UserID: 4, GroupID: 4},
+		UserGroup{UserID: 5, GroupID: 5},
+	}
+	ug.SetData(ugData)
+	_, _ = ug.Insert()
+	data, e := modelx.NewModelx[UserGroup]().Select(`1=1 ORDER BY user_id`, nil)
+	fmt.Printf("%+v: %+v\n", data, e)
+	// Update some rows - move some user(5) to another group(4).
+	ugDataUpd := []UserGroup{
+		UserGroup{
+			UserID: 5,
+			// new (to be updated in the database) value: 2
+			GroupID: 4,
+			Where: whereParams{
+				// existing in the database value: 5
+				GroupID: 5,
+			},
+		},
+	}
+	ug.SetData(ugDataUpd)
+	//							set columns										WHERE struct
+	rs, err := ug.Update([]string{`group_id`}, `user_id=:user_id AND group_id=:where.group_id`)
+	if err != nil {
+		fmt.Println(err.Error())
+	}
+	affected, _ := rs.RowsAffected()
+	fmt.Printf("RowsAffected: %d; err: %+v", affected, err)
+	// Output:
+	// 1
 }
