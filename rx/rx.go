@@ -1,5 +1,5 @@
 /*
-Package modelx is a minimalistic object to database-rows mapper and wrapper for
+Package rx provides a minimalistic object to database-rows mapper and wrapper for
 [sqlx]. It provides interfaces and a generic data type, and implements the
 provided interfaces to work easily with sets of database records. The
 relations' constraints are left to be managed by the database and you. This may
@@ -23,14 +23,14 @@ name. You can mark such fields with tags. See below.
 		Users{LoginName: "the_third"},
 	}
 
-	r, e := modelx.NewModelx(users).Insert()
+	r, e := rx.NewModelx(users).Insert()
 	if e != nil {
 		fmt.Fprintf(os.Stderr, "Got error from m.Insert(): %s", e.Error())
 		return
 	}
 	//...
 */
-package modelx
+package rx
 
 import (
 	"database/sql"
@@ -47,7 +47,7 @@ import (
 )
 
 var (
-	// DefaultLogHeader is a template for modelx logging
+	// DefaultLogHeader is a template for rx logging
 	DefaultLogHeader = `${prefix}:${level}:${short_file}:${line}`
 	// DefaultLimit is the default LIMIT for SQL queries.
 	DefaultLimit = 100
@@ -97,7 +97,7 @@ type SqlxRows interface {
 
 /*
 SqlxModel is an interface and generic constraint for working with a set of
-database records. [Modelx] fully implements SqlxModel. You can embed (extend)
+database records. [Rx] fully implements SqlxModel. You can embed (extend)
 Modelx to get automatically its implementation and override some of its
 methods.
 */
@@ -111,7 +111,7 @@ type SqlxModel[R SqlxRows] interface {
 
 /*
 SqlxModelInserter can be implemented to insert records in a table. It is fully
-implemented by [Modelx].
+implemented by [Rx].
 */
 type SqlxModelInserter[R SqlxRows] interface {
 	Data() []R
@@ -122,7 +122,7 @@ type SqlxModelInserter[R SqlxRows] interface {
 
 /*
 SqlxModelUpdater can be implemented to update records in a table. It is fully
-implemented by [Modelx].
+implemented by [Rx].
 */
 type SqlxModelUpdater[R SqlxRows] interface {
 	Data() []R
@@ -132,7 +132,7 @@ type SqlxModelUpdater[R SqlxRows] interface {
 
 /*
 SqlxModelGetter can be implemented to get one record from the database. It is
-fully implemented by [Modelx].
+fully implemented by [Rx].
 */
 type SqlxModelGetter[R SqlxRows] interface {
 	Table() string
@@ -142,7 +142,7 @@ type SqlxModelGetter[R SqlxRows] interface {
 
 /*
 SqlxModelSelector can be implemented to select records from a table or view. It
-is fully implemented by [Modelx].
+is fully implemented by [Rx].
 */
 type SqlxModelSelector[R SqlxRows] interface {
 	SqlxModelGetter[R]
@@ -151,7 +151,7 @@ type SqlxModelSelector[R SqlxRows] interface {
 
 /*
 SqlxModelDeleter can be implemented to delete records from a table. It is
-fully implemented by [Modelx].
+fully implemented by [Rx].
 */
 type SqlxModelDeleter[R SqlxRows] interface {
 	Table() string
@@ -159,13 +159,13 @@ type SqlxModelDeleter[R SqlxRows] interface {
 }
 
 /*
-Modelx implements the [SqlxModel] interface and can be used right away or
+Rx implements the [SqlxModel] interface and can be used right away or
 embedded (extended) to customise its behaviour for your own needs.
 
 To embed this type, write something similar to the following:
 
 	type MyTableName struct {
-		modelx.Modelx[MyTableName]
+		rx.Rx[MyTableName]
 		data []MyTableName
 	}
 	// Now you can implement some custom methods to insert, select, update and
@@ -177,7 +177,7 @@ To embed this type, write something similar to the following:
 	data, err := mm.Select(`WHERE id >:id`, map[string]any{`id`: 1}.
 	// And you may want to implement your own Columns() and Table()...
 */
-type Modelx[R SqlxRows] struct {
+type Rx[R SqlxRows] struct {
 	// structMap is an index of field metadata for the underlying struct R.
 	structMap *reflectx.StructMap
 	/*
@@ -196,24 +196,24 @@ type Modelx[R SqlxRows] struct {
 }
 
 /*
-NewModelx returns a new instance of a table model with optionally provided data
+NewRx returns a new instance of a table model with optionally provided data
 rows as a variadic parameter. Providing the specific type parameter to
 instantiate is mandatory if it cannot be inferred from the variadic parameter.
 */
-func NewModelx[R SqlxRows](rows ...R) SqlxModel[R] {
-	m := &Modelx[R]{data: rows}
+func NewRx[R SqlxRows](rows ...R) SqlxModel[R] {
+	m := &Rx[R]{data: rows}
 	return m
 }
 
 // rowx returns a (*R)(nil). We use it only for metadata extraction. So we do
 // not need to allocate any memory.
-func (m *Modelx[R]) rowx() *R {
+func (m *Rx[R]) rowx() *R {
 	return (*R)(nil)
 }
 
 // fieldsMap returns a pointer to [reflectx.structMap] for the generic
 // structure. It is the cornerstone to implement the SqlxModelMeta interface.
-func (m *Modelx[R]) fieldsMap() *reflectx.StructMap {
+func (m *Rx[R]) fieldsMap() *reflectx.StructMap {
 	if m.structMap != nil {
 		return m.structMap
 	}
@@ -223,7 +223,7 @@ func (m *Modelx[R]) fieldsMap() *reflectx.StructMap {
 
 // Table returns the converted to snake case name of the type to be used as
 // table name in sql queries.
-func (m *Modelx[R]) Table() string {
+func (m *Rx[R]) Table() string {
 	if m.table != "" {
 		return m.table
 	}
@@ -235,14 +235,14 @@ func (m *Modelx[R]) Table() string {
 Data returns the slice of structs, passed to [NewModelx]. It may return nil
 if no rows were passed to [NewModelx].
 */
-func (m *Modelx[R]) Data() []R {
+func (m *Rx[R]) Data() []R {
 	return m.data
 }
 
 /*
 SetData sets a slice of R to be inserted or updated in the database.
 */
-func (m *Modelx[R]) SetData(data []R) SqlxModel[R] {
+func (m *Rx[R]) SetData(data []R) SqlxModel[R] {
 	m.data = data
 	return m
 }
@@ -250,7 +250,7 @@ func (m *Modelx[R]) SetData(data []R) SqlxModel[R] {
 /*
 Columns returns a slice with the names of the table's columns.
 */
-func (m *Modelx[R]) Columns() []string {
+func (m *Rx[R]) Columns() []string {
 	if len(m.columns) > 0 {
 		return m.columns
 	}
@@ -311,14 +311,14 @@ returns [sql.Result] and [error]. The value for the autoincremented primary key
 If the records to be inserted are more than one, the data is inserted in a
 transaction. [sql.Result.RowsAffected] will always return 1, because every row
 is inserted in its own statement. This may change in a future release. If there
-are no records to be inserted, [Modelx.Insert] panics.
+are no records to be inserted, [Rx.Insert] panics.
 
 If you need to insert an [SqlxRows] structure with a specific value for ID, add a
 tag to the ID column `rx:id,no_auto` or use directly [sqlx].
 
 If you want to skip any field during insert add, a tag to it `rx:field_name,auto`.
 */
-func (m *Modelx[R]) Insert() (sql.Result, error) {
+func (m *Rx[R]) Insert() (sql.Result, error) {
 	dataLen := len(m.Data())
 	if dataLen == 0 {
 		Logger.Panic("Cannot insert, when no data is provided!")
@@ -374,12 +374,12 @@ func (m *Modelx[R]) Insert() (sql.Result, error) {
 
 /*
 Select prepares, executes a SELECT statement and returns the collected result
-as a slice. Selected records can also be used with [Modelx.Data].
+as a slice. Selected records can also be used with [Rx.Data].
 `limitAndOffset` is expected to be used as a variadic parameter. If passed, it
 is expected to consist of two values limit and offset - in that order. The
 default value for LIMIT can be set by [DefaultLimit]. OFFSET is 0 by default.
 */
-func (m *Modelx[R]) Select(where string, bindData any, limitAndOffset ...int) ([]R, error) {
+func (m *Rx[R]) Select(where string, bindData any, limitAndOffset ...int) ([]R, error) {
 	if len(limitAndOffset) == 0 {
 		limitAndOffset = append(limitAndOffset, DefaultLimit)
 	}
@@ -408,7 +408,7 @@ func (m *Modelx[R]) Select(where string, bindData any, limitAndOffset ...int) ([
 	return m.data, nil
 }
 
-func (m *Modelx[R]) renderSelectTemplate(where string, limitAndOffset []int) string {
+func (m *Rx[R]) renderSelectTemplate(where string, limitAndOffset []int) string {
 	stash := map[string]any{
 		`columns`: strings.Join(m.Columns(), ","),
 		`table`:   m.Table(),
@@ -425,7 +425,7 @@ func (m *Modelx[R]) renderSelectTemplate(where string, limitAndOffset []int) str
 Get executes [sqlx.DB.Get] and returns the result scanned into an instantiated
 [SqlxRows] object or an error.
 */
-func (m *Modelx[R]) Get(where string, bindData ...any) (*R, error) {
+func (m *Rx[R]) Get(where string, bindData ...any) (*R, error) {
 	row := new(R)
 	query := m.renderSelectTemplate(where, []int{1, 0})
 	var (
@@ -472,7 +472,7 @@ Update constructs a Named UPDATE query, prepares it and executes it for each
 row of data in a transaction. It panics if there is no data to be updated.
 
 We pass as bind parameters for each [sqlx.NamedStmt.Exec] each element
-of the slice of passed [SqlxRows] to [NewModelx] or to [Modelx.SetData].
+of the slice of passed [SqlxRows] to [NewModelx] or to [Rx.SetData].
 
 This is somehow problematic with named queries. What if we want to `SET
 group_id=1 WHERE group_id=2. How to differntiate between columns to be updated
@@ -492,7 +492,7 @@ converted to snake_case.
 
 For any case in which this method is not suitable, use directly sqlx.
 */
-func (m *Modelx[R]) Update(fields []string, where string) (sql.Result, error) {
+func (m *Rx[R]) Update(fields []string, where string) (sql.Result, error) {
 	if len(m.Data()) == 0 {
 		Logger.Panic("Cannot update, when no data is provided!")
 	}
@@ -534,7 +534,7 @@ func (m *Modelx[R]) Update(fields []string, where string) (sql.Result, error) {
 /*
 Delete deletes records from the database.
 */
-func (m *Modelx[R]) Delete(where string, bindData any) (sql.Result, error) {
+func (m *Rx[R]) Delete(where string, bindData any) (sql.Result, error) {
 	stash := map[string]any{
 		`table`: m.Table(),
 		`WHERE`: ifWhere(where),

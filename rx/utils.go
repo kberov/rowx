@@ -1,4 +1,4 @@
-package modelx
+package rx
 
 import (
 	"strings"
