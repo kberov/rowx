@@ -69,7 +69,7 @@ type Groups struct {
 	ID        int32 `rx:"id,auto"`
 }
 
-// Stollen from sqlx_test.go
+// Stollen from sqlx_test.go.
 func multiExec(e sqlx.Execer, query string) {
 	stmts := strings.Split(query, ";\n")
 	if len(strings.Trim(stmts[len(stmts)-1], " \n\t\r")) == 0 {
@@ -84,8 +84,8 @@ func multiExec(e sqlx.Execer, query string) {
 }
 
 func init() {
-	rx.DSN = ":memory:"
-	rx.DriverName = `sqlite3`
+	// rx.DSN = ":memory:"
+	// rx.DriverName = `sqlite3`
 	multiExec(rx.DB(), schema)
 }
 
@@ -203,6 +203,26 @@ func TestTable(t *testing.T) {
 	}
 }
 
+func TestSnakeToCamel(t *testing.T) {
+	tests := []struct {
+		name              string
+		tableOrColumnName string
+		typeOrFieldName   string
+	}{
+		{name: `long`, tableOrColumnName: `a_very_long_and_complex_table_name`, typeOrFieldName: `AVeryLongAndComplexTableName`},
+		{name: `short`, tableOrColumnName: `id`, typeOrFieldName: `ID`},
+		{name: `longUtf8`, tableOrColumnName: `и_още_една_невъзможна_таблица`, typeOrFieldName: `ИОщеЕднаНевъзможнаТаблица`},
+		{name: `късутф8`, tableOrColumnName: `ид`, typeOrFieldName: `ИД`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equalf(t, tc.typeOrFieldName, rx.SnakeToCamel(tc.tableOrColumnName),
+				`SnakeToCamel("%s") should return "%s"`, tc.tableOrColumnName, tc.typeOrFieldName)
+			t.Logf(`SnakeToCamel("%s") returns "%s"`, tc.tableOrColumnName, tc.typeOrFieldName)
+		})
+	}
+}
+
 func TestColumns(t *testing.T) {
 	tests := []struct {
 		name string
@@ -256,76 +276,77 @@ func TestMultyInsert(t *testing.T) {
 	t.Logf("sql.Result:%#v; Error:%#v;", r, e)
 }
 
+var testsForTestSelect = []struct {
+	name, where   string
+	errContains   string
+	bindData      map[string]any
+	lAndOff       []int
+	lastID        int32
+	expectedError bool
+}{
+	{
+		// Does a SELECT with default LIMIT and OFFSET, without any WHERE clauses.
+		name:     `All`,
+		where:    ``,
+		bindData: nil,
+		lastID:   3,
+	},
+	{
+		// Does a SELECT with LIMIT 2
+		name:     `WithLimit`,
+		where:    ``,
+		bindData: nil,
+		lAndOff:  []int{2, 0},
+		lastID:   2,
+	},
+	{
+		// Does a SELECT with LIMIT 2 and OFFSET 1
+		name:     `WithLimitAndOffset`,
+		where:    ``,
+		bindData: nil,
+		lAndOff:  []int{2, 1},
+		lastID:   3,
+	},
+	{
+		// Does a SELECT with WHERE id<:id
+		name:     `WithWhere`,
+		where:    `id >:id`,
+		bindData: map[string]any{`id`: 1},
+		lastID:   3,
+	},
+	{
+		name:          `PrepareError`,
+		where:         `WHERE `,
+		bindData:      map[string]any{`id`: 1},
+		lastID:        3,
+		expectedError: true,
+		errContains:   `syntax error`,
+	},
+	{
+		name:          `SelectError`,
+		where:         `id=:id`,
+		bindData:      map[string]any{},
+		lastID:        3,
+		expectedError: true,
+		errContains:   `could not find name id`,
+	},
+	{
+		name:     `SelectIN`,
+		where:    `id IN(:ids)`,
+		bindData: map[string]any{`ids`: []int{1, 2, 3}},
+		lastID:   3,
+	},
+	{
+		name:     `SelectOrderByDesc`,
+		where:    `id IN(:ids) ORDER BY id DESC`,
+		bindData: map[string]any{`ids`: []int{1, 2, 3}},
+		lastID:   1,
+	},
+}
+
 func TestSelect(t *testing.T) {
 	m := rx.NewRx[Users]()
-	tests := []struct {
-		name, where   string
-		errContains   string
-		bindData      map[string]any
-		lAndOff       []int
-		lastID        int32
-		expectedError bool
-	}{
-		{
-			// Does a SELECT with default LIMIT and OFFSET, without any WHERE clauses.
-			name:     `All`,
-			where:    ``,
-			bindData: nil,
-			lastID:   3,
-		},
-		{
-			// Does a SELECT with LIMIT 2
-			name:     `WithLimit`,
-			where:    ``,
-			bindData: nil,
-			lAndOff:  []int{2, 0},
-			lastID:   2,
-		},
-		{
-			// Does a SELECT with LIMIT 2 and OFFSET 1
-			name:     `WithLimitAndOffset`,
-			where:    ``,
-			bindData: nil,
-			lAndOff:  []int{2, 1},
-			lastID:   3,
-		},
-		{
-			// Does a SELECT with WHERE id<:id
-			name:     `WithWhere`,
-			where:    `id >:id`,
-			bindData: map[string]any{`id`: 1},
-			lastID:   3,
-		},
-		{
-			name:          `PrepareError`,
-			where:         `WHERE `,
-			bindData:      map[string]any{`id`: 1},
-			lastID:        3,
-			expectedError: true,
-			errContains:   `syntax error`,
-		},
-		{
-			name:          `SelectError`,
-			where:         `id=:id`,
-			bindData:      map[string]any{},
-			lastID:        3,
-			expectedError: true,
-			errContains:   `could not find name id`,
-		},
-		{
-			name:     `SelectIN`,
-			where:    `id IN(:ids)`,
-			bindData: map[string]any{`ids`: []int{1, 2, 3}},
-			lastID:   3,
-		},
-		{
-			name:     `SelectOrderByDesc`,
-			where:    `id IN(:ids) ORDER BY id DESC`,
-			bindData: map[string]any{`ids`: []int{1, 2, 3}},
-			lastID:   1,
-		},
-	}
-	for _, tc := range tests {
+	for _, tc := range testsForTestSelect {
 		t.Run(tc.name, func(t *testing.T) {
 			rows, err := m.Select(tc.where, tc.bindData, tc.lAndOff...)
 			if err != nil && !tc.expectedError {
@@ -338,7 +359,7 @@ func TestSelect(t *testing.T) {
 				}
 				return
 			}
-			dataLen := int32(len(rows))
+			dataLen := uint(len(rows))
 			if rows[dataLen-1].ID != tc.lastID {
 				t.Errorf("Expected last.ID to be %d. Got %d", tc.lastID, rows[dataLen-1].ID)
 			}
@@ -346,58 +367,58 @@ func TestSelect(t *testing.T) {
 	}
 }
 
-func TestUpdate(t *testing.T) {
-	tests := []struct {
-		Rx          rx.SqlxModel[Users]
-		name        string
-		where       string
-		selectWhere string
-		selectBind  map[string]any
-		columns     []string
-		affected    int64
-		dbError     bool
-	}{
-		{
-			name:        `One`,
-			where:       `id=:id`,
-			selectWhere: `id=:id`,
-			Rx: rx.NewRx(Users{LoginName: `first_updated`, ID: 1,
-				GroupID: sql.NullInt32{Valid: true, Int32: 0}}),
-			affected:   1,
-			columns:    []string{`Login_name`},
-			selectBind: map[string]any{`id`: 1},
-			dbError:    false,
-		},
-		{
-			name: `ManyUniqueConstraintFail`,
-			// this WHERE clause will produce UNIQUE CONSTRAINT Error, because login_name is UNIQUE.
-			where:       `id IN(SELECT id FROM users WHERE ID>1)`,
-			selectWhere: `id IN(SELECT id FROM users WHERE ID>1)`,
-			Rx: rx.NewRx(
-				Users{LoginName: `second_updated`, ID: 2},
-				Users{LoginName: `third_updated`, ID: 3, GroupID: sql.NullInt32{Valid: true, Int32: 2}},
-			),
-			affected: 0,
-			columns:  []string{`LoginName`, `group_id`},
-			dbError:  true,
-		},
-		{
-			name: `ManyUniqueConstraintOK`,
-			// this WHERE clause will NOT produce UNIQUE CONSTRAINT Error, because id is PRIMARY KEY.
-			where: `id = :id`,
-			Rx: rx.NewRx(
-				Users{LoginName: `second_updated_ok`, ID: 2, GroupID: sql.NullInt32{Valid: true, Int32: 2}},
-				Users{LoginName: `third_updated_ok`, ID: 3, GroupID: sql.NullInt32{Valid: true, Int32: 3}},
-			),
-			affected:    2,
-			columns:     []string{`login_name`, `GroupID`},
-			dbError:     false,
-			selectWhere: `id IN(:id)`,
-			selectBind:  map[string]any{`id`: []any{2, 3}},
-		},
-	}
+var testsForTestUpdate = []struct {
+	Rx          rx.SqlxModel[Users]
+	name        string
+	where       string
+	selectWhere string
+	selectBind  map[string]any
+	columns     []string
+	affected    int64
+	dbError     bool
+}{
+	{
+		name:        `One`,
+		where:       `id=:id`,
+		selectWhere: `id=:id`,
+		Rx: rx.NewRx(Users{LoginName: `first_updated`, ID: 1,
+			GroupID: sql.NullInt32{Valid: true, Int32: 0}}),
+		affected:   1,
+		columns:    []string{`Login_name`},
+		selectBind: map[string]any{`id`: 1},
+		dbError:    false,
+	},
+	{
+		name: `ManyUniqueConstraintFail`,
+		// this WHERE clause will produce UNIQUE CONSTRAINT Error, because login_name is UNIQUE.
+		where:       `id IN(SELECT id FROM users WHERE ID>1)`,
+		selectWhere: `id IN(SELECT id FROM users WHERE ID>1)`,
+		Rx: rx.NewRx(
+			Users{LoginName: `second_updated`, ID: 2},
+			Users{LoginName: `third_updated`, ID: 3, GroupID: sql.NullInt32{Valid: true, Int32: 2}},
+		),
+		affected: 0,
+		columns:  []string{`LoginName`, `group_id`},
+		dbError:  true,
+	},
+	{
+		name: `ManyUniqueConstraintOK`,
+		// this WHERE clause will NOT produce UNIQUE CONSTRAINT Error, because id is PRIMARY KEY.
+		where: `id = :id`,
+		Rx: rx.NewRx(
+			Users{LoginName: `second_updated_ok`, ID: 2, GroupID: sql.NullInt32{Valid: true, Int32: 2}},
+			Users{LoginName: `third_updated_ok`, ID: 3, GroupID: sql.NullInt32{Valid: true, Int32: 3}},
+		),
+		affected:    2,
+		columns:     []string{`login_name`, `GroupID`},
+		dbError:     false,
+		selectWhere: `id IN(:id)`,
+		selectBind:  map[string]any{`id`: []any{2, 3}},
+	},
+}
 
-	for i, tc := range tests {
+func TestUpdate(t *testing.T) {
+	for i, tc := range testsForTestUpdate {
 		t.Run(tc.name, func(t *testing.T) {
 			var (
 				r sql.Result
@@ -477,7 +498,7 @@ func TestDelete(t *testing.T) {
 	}
 }
 
-type myModel[R rx.SqlxRows] struct {
+type myModel[R rx.Rowx] struct {
 	rx.Rx[R]
 	data []R
 }
@@ -574,7 +595,6 @@ func TestPanics(t *testing.T) {
 			expectPanic(t, tc.fn)
 		})
 	}
-
 }
 
 func expectPanic(t *testing.T, f func()) {
@@ -609,8 +629,8 @@ func Benchmark_stringContainsWhere(b *testing.B) {
 	}
 }
 
-// but matching with regexp is much more reliable than checking if the string
-// just contains where
+// ...but matching with regexp is much more reliable than checking if the string
+// just contains where.
 var containsWhere = regexp.MustCompile(`(?i:^\s*where\s)`)
 
 func Benchmark_regexpMatchWhere(b *testing.B) {
@@ -633,7 +653,7 @@ func Fuzz_containsWhere(f *testing.F) {
 	})
 }
 
-// # Examples
+// # Examples.
 func ExampleNewRx() {
 	// If no SqlxRows are passed, NewRx needs a type parameter to know
 	// which type to instantiate for subsequent call to Select(...) or Delete(...)....
@@ -655,7 +675,6 @@ func ExampleNewRx_with_param() {
 }
 
 func ExampleRx_Data() {
-
 	type Users struct {
 		LoginName string
 		GroupID   sql.NullInt32
@@ -678,7 +697,6 @@ func ExampleRx_Data() {
 }
 
 func ExampleRx_SetData() {
-
 	ugDataIns := []UserGroup{
 		UserGroup{UserID: 1, GroupID: 1},
 		UserGroup{UserID: 2, GroupID: 2},
@@ -713,7 +731,6 @@ func ExampleRx_Table() {
 }
 
 func ExampleRx_Columns() {
-
 	type Books struct {
 		Title  string
 		Author string
@@ -734,7 +751,6 @@ func ExampleRx_Columns() {
 }
 
 func ExampleRx_Insert() {
-
 	_, e := rx.NewRx(users...).Insert()
 	if e != nil {
 		println(`Error inserting new users:`, e)
@@ -788,18 +804,39 @@ func ExampleRx_Get() {
 }
 
 func ExampleRx_Select() {
-
 	bind := struct{ IDs []uint }{IDs: []uint{4, 5}}
-	data, err := rx.NewRx[Users]().Select(`id IN(:ids)`, bind)
+	u := rx.NewRx[Users]()
+	data, err := u.Select(`id IN(:ids) ORDER BY id DESC`, bind)
 	if err != nil {
 		fmt.Println(err.Error())
 	}
-	for i, u := range data {
-		fmt.Printf("%d: %s\n", i+1, u.LoginName)
+	fmt.Println(`Last two records in descending order:`)
+	for _, u := range data {
+		fmt.Printf("%d: %s\n", u.ID, u.LoginName)
+	}
+
+	// We can reuse the *Rx object for this parameter type for many and
+	// different SQL queries.
+	fmt.Println("\nUp to DefaultLimit records with OFFSET 0 in the default order:")
+	data, err = u.Select(``, nil)
+	if err != nil {
+		fmt.Println(err.Error())
+	}
+	for _, u := range data {
+		fmt.Printf("%d: %s\n", u.ID, u.LoginName)
 	}
 	// Output:
-	// 1: fourth
-	// 2: fifth
+	// Last two records in descending order:
+	// 5: fifth
+	// 4: fourth
+	//
+	// Up to DefaultLimit records with OFFSET 0 in the default order:
+	// 0: superadmin
+	// 1: first
+	// 2: the_second
+	// 3: the_third
+	// 4: fourth
+	// 5: fifth
 }
 
 func ExampleRx_Update() {
@@ -812,7 +849,8 @@ func ExampleRx_Update() {
 		// queries. Must be a named struct, known at compile time!
 		Where whereBind `rx:"where,-"` // - : Do not treat this field as column.
 	}
-
+	// rx.Rx can be embedded and used from within your record structure or
+	// specialized type.
 	ug := new(UserGroup)
 	ugData := []UserGroup{
 		UserGroup{UserID: 4, GroupID: 4},
@@ -824,11 +862,11 @@ func ExampleRx_Update() {
 		fmt.Println("Error inserting into user_group:", e.Error())
 	}
 
-	// Update some rows - move some user(5) to another group(4).
+	// Update one or many rows - move some user(5) to another group(4).
 	ugDataUpd := []UserGroup{
 		UserGroup{
 			UserID: 5,
-			// new (to be updated in the database) value: 2
+			// new value (to be updated in the database). Current value: 5
 			GroupID: 4,
 			Where: whereBind{
 				// existing in the database value: 5
@@ -837,7 +875,7 @@ func ExampleRx_Update() {
 		},
 	}
 	ug.SetData(ugDataUpd)
-	//                    set columns                                      the Where.GroupID field
+	//                    columns to be set                             the Where.GroupID field
 	rs, err := ug.Update([]string{`group_id`}, `user_id=:user_id AND group_id=:where.group_id`)
 	if err != nil {
 		fmt.Println(err.Error())

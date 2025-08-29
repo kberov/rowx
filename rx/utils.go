@@ -1,24 +1,32 @@
 package rx
 
 import (
+	"reflect"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 )
 
+func type2str[R Rowx](row R) string {
+	return reflect.TypeOf(row).Elem().Name()
+}
+
+const type2StrPanicFmtStr = "Could not derive table name from type '%s'!"
+
 /*
 TypeToSnakeCase converts struct type name like
-*model.AVeryLongAndComplexTableName to 'a_very_long_and_complex_table_name' and
-returns it. Panics if unsuccessful.
+AVeryLongAndComplexTableName to 'a_very_long_and_complex_table_name' and
+returns it. Panics if the structure is annonimous or there are nonalphanumeric
+characters.
 */
-func TypeToSnakeCase[R any](row R) string {
-	typestr := sprintf("%T", row)
-	// Logger.Debugf("TypeToSnakeCase typestr: %s", typestr)
-	_, table, ok := strings.Cut(typestr, `.`)
-	if !ok {
-		Logger.Panicf("Could not derive table name from type '%s'!", typestr)
+func TypeToSnakeCase[R Rowx](row R) string {
+	typestr := type2str(row)
+	Logger.Debugf("TypeToSnakeCase typestr: %s", typestr)
+	// Anonimous struct
+	if typestr == `` {
+		Logger.Panicf(type2StrPanicFmtStr, typestr)
 	}
-	return CamelToSnakeCase(table)
+	return CamelToSnakeCase(typestr)
 }
 
 /*
@@ -55,4 +63,34 @@ func lowerLetter(snakeCase *strings.Builder, r rune, wordBegins, prevWasUpper bo
 	}
 	snakeCase.WriteRune(r)
 	return wordBegins, prevWasUpper
+}
+
+/*
+SnakeToCamel converts words from snake_case to CamelCase. It will be used to
+convert table_name to StructName and column_names to ColumnNames. This will be
+done during generation of structures out from tables.
+*/
+func SnakeToCamel(snake_case_word string) string { //nolint:all //  should be snakeCaseWord
+	if utf8.RuneCountInString(snake_case_word) == 2 {
+		return strings.ToUpper(snake_case_word)
+	}
+	var words strings.Builder
+	nextToBeUpper := false
+	for i, c := range snake_case_word {
+		if i == 0 {
+			words.WriteRune(unicode.ToTitle(c))
+			continue
+		}
+		if c == '_' {
+			nextToBeUpper = true
+			continue
+		}
+		if nextToBeUpper {
+			words.WriteRune(unicode.ToTitle(c))
+			nextToBeUpper = false
+			continue
+		}
+		words.WriteRune(c)
+	}
+	return words.String()
 }
