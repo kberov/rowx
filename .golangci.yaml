@@ -7,6 +7,30 @@ linters:
     - revive
     - errcheck
     - staticcheck
+    - dupl
+    - exptostd
+    - funcorder
+    - funlen
+    - gocognit
+    - gocyclo
+    - godot
+    # For when I decide to deal with some TODO: or FIXME:
+    # - godox
+    - gosec
+    - iface
+    - importas
+    - interfacebloat
+    - intrange
+    - maintidx
+    - makezero
+    - mirror
+    - perfsprint
+    - prealloc
+    - predeclared
+    - testableexamples
+    - testpackage
+    - usestdlibvars
+    - whitespace
   settings:
     govet:
       enable-all: true
