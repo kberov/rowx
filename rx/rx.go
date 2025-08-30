@@ -29,6 +29,8 @@ name. You can mark such fields with tags. See below.
 		return
 	}
 	//...
+
+[sqlx]: https://github.com/jmoiron/sqlx
 */
 package rx
 
@@ -471,3 +473,6 @@ func (m *Rx[R]) Delete(where string, bindData any) (sql.Result, error) {
 
 	return DB().NamedExec(query, bindData)
 }
+
+/*
+ */
