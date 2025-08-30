@@ -72,7 +72,7 @@ type SqlxDeleter[R Rowx] interface {
 /*
 SqlxMeta can be implemented to return the name of the table in the database for
 the implementing type and the slice with its column names. It is fully
-implemented by [Meta].
+implemented by [Rx].
 */
 type SqlxMeta[R Rowx] interface {
 	Table() string

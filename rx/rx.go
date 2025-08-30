@@ -84,43 +84,28 @@ func DB() *sqlx.DB {
 	Logger.Debugf("Connecting to database '%s'...", DSN)
 
 	singleDB = sqlx.MustConnect(DriverName, DSN)
-	singleDB.Mapper = reflectx.NewMapperFunc(ReflectXTag, CamelToSnakeCase)
+	singleDB.Mapper = reflectx.NewMapperFunc(ReflectXTag, CamelToSnake)
 	return singleDB
 }
 
 /*
 Rx implements the [SqlxModel] interface and can be used right away or
 embedded (extended) to customise its behaviour for your own needs.
-
-To embed this type, write something similar to the following:
-
-	type MyTableName struct {
-		rx.Rx[MyTableName]
-		data []MyTableName
-	}
-	// Now you can implement some custom methods to insert, select, update and
-	// delete your sets of records. Maybe some custom constructor.
-	//...
-	// Somewhere else in the code, using it...
-	mm = new(MyTableName)
-	// WHERE clause can be as complex as you need.
-	data, err := mm.Select(`WHERE id >:id`, map[string]any{`id`: 1}.
-	// And you may want to implement your own Columns() and Table()...
 */
 type Rx[R Rowx] struct {
-	/*
-		table allows to set explicitly the table name for this model. Otherwise
-		it is guessed and set from the type of the first element of Data slice
-		upon first use of '.Table()'.
-	*/
-	table string
-	// columns of the table are populated upon first use of '.Columns()'.
-	columns []string
 	/*
 		data is a slice of rows, retrieved from the database or to be inserted,
 		or updated.
 	*/
 	data []R
+	/*
+		table allows to set explicitly the table name of this record. Otherwise
+		it is guessed and set from the type of the first element of data slice in Rx[R]
+		upon first use of '.Table()'.
+	*/
+	table string
+	// columns of the table are populated upon first use of '.Columns()'.
+	columns []string
 }
 
 /*
@@ -159,7 +144,7 @@ func (m *Rx[R]) Table() string {
 	if m.table != "" {
 		return m.table
 	}
-	m.table = TypeToSnakeCase(rowx[R]())
+	m.table = TypeToSnake(rowx[R]())
 	return m.table
 }
 

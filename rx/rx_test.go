@@ -203,6 +203,28 @@ func TestTable(t *testing.T) {
 	}
 }
 
+func TestCamelToSnake(t *testing.T) {
+	slovo := map[string]string{
+		"Кънигы":              "кънигы",
+		"НашитеКънигы":        "нашите_кънигы",
+		"OwnerID":             "owner_id",
+		"PageType":            "page_type",
+		"UsersInvoicesLastID": "users_invoices_last_id",
+		"ID":                  "id",
+		"ИД":                  "ид",
+	}
+
+	for k, v := range slovo {
+		t.Run(k, func(t *testing.T) {
+			slova := rx.CamelToSnake(k)
+			t.Logf("%s => %s|%s", k, slova, v)
+			if slova != v {
+				t.Fail()
+			}
+		})
+	}
+}
+
 func TestSnakeToCamel(t *testing.T) {
 	tests := []struct {
 		name              string
@@ -586,7 +608,7 @@ func TestPanics(t *testing.T) {
 			name: `TypeToSnakeCase`,
 			fn: func() {
 				r := new(struct{ ID int16 })
-				rx.TypeToSnakeCase(r)
+				rx.TypeToSnake(r)
 			},
 		},
 	}
