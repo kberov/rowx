@@ -174,7 +174,7 @@ func TestTryEmbed(t *testing.T) {
 
 func TestNewModelNoData(t *testing.T) {
 	// For subsequent call to Select(...) or Delete(...)....
-	// If no SqlxRows are passed, NewRx needs a type parameter to know
+	// If no Rowx are passed, NewRx needs a type parameter to know
 	// which type to instantiate.
 	m := rx.NewRx[Users]()
 	if m == nil {
@@ -677,7 +677,7 @@ func Fuzz_containsWhere(f *testing.F) {
 
 // # Examples.
 func ExampleNewRx() {
-	// If no SqlxRows are passed, NewRx needs a type parameter to know
+	// If no Rowx are passed, NewRx needs a type parameter to know
 	// which type to instantiate for subsequent call to Select(...) or Delete(...)....
 	m := rx.NewRx[Users]()
 	fmt.Printf(" %#T\n", m)
@@ -762,14 +762,11 @@ func ExampleRx_Columns() {
 	}
 
 	b := Books{Title: `Нова земя`, Author: `Иванъ Вазовъ`, Body: `По стръмната южна урва на Амбарица...`}
-	// Sorting is done here just to ensure for the example test that the coulmns
-	// will always come in the same order.
 	columns := rx.NewRx(b).Columns()
-	slices.Sort(columns)
 	fmt.Printf("Columns: %+v\n", columns)
 
 	// Output:
-	// Columns: [author body id title]
+	// Columns: [title author body id]
 }
 
 func ExampleRx_Insert() {

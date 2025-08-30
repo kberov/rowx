@@ -149,8 +149,8 @@ func (m *Rx[R]) Table() string {
 }
 
 /*
-Data returns the slice of structs, passed to [NewRx]. It may return nil
-if no rows were passed to [NewRx].
+Data returns the slice of structs, passed to [NewRx] or selected from the
+database. It may return nil if no rows were passed to [NewRx].
 */
 func (m *Rx[R]) Data() []R {
 	return m.data
@@ -173,7 +173,7 @@ func (m *Rx[R]) Columns() []string {
 	}
 	/*
 	   TODO: Some day... use go:generate to move such code to compile time for
-	   SqlxRows implementing types. Consider also a solution to (eventually
+	   Rowx implementing types. Consider also a solution to (eventually
 	   gradually) regenerate Rx embedding types and recompile the
 	   application due to changes in the database schema. This is how we can
 	   implement database migrations starting from the database.  1. During
@@ -226,7 +226,7 @@ func (m *Rx[R]) Columns() []string {
 }
 
 /*
-Insert inserts a set of SqlxRows instances (without their primary key values) and
+Insert inserts a set of Rowx instances (without their primary key values) and
 returns [sql.Result] and [error]. The value for the autoincremented primary key
 (usually ID column) is left to be set by the database.
 

@@ -16,8 +16,7 @@ const type2StrPanicFmtStr = "Could not derive table name from type '%s'!"
 /*
 TypeToSnake converts struct type name like
 AVeryLongAndComplexTableName to 'a_very_long_and_complex_table_name' and
-returns it. Panics if the structure is annonimous or there are nonalphanumeric
-characters.
+returns it. Panics if the structure is annonimous.
 */
 func TypeToSnake[R Rowx](row R) string {
 	typestr := type2str(row)
