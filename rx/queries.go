@@ -48,12 +48,11 @@ func SQLForSET(columns []string) string {
 	for _, v := range columns {
 		for _, r := range v {
 			if unicode.IsUpper(r) {
-				v = CamelToSnakeCase(v)
+				v = CamelToSnake(v)
 				break
 			}
 			break
 		}
-
 		set.WriteString(sprintf(` %s = :%[1]s,`, v))
 	}
 	setStr := strings.TrimSuffix(set.String(), `,`)
