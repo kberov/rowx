@@ -104,6 +104,37 @@ type whereParams struct{ GroupID int32 }
 // TODO: Someday, maybe, make the order of execution not important or use
 // something like TestMain.
 
+// A custom type, which implements rx.SqlxMeta.
+type U struct {
+	table     string
+	LoginName string
+	ID        int32 `rx:"id,auto"`
+}
+
+func (u *U) Table() string {
+	if u.table == "" {
+		u.table = `users`
+	}
+	return u.table
+}
+
+var uColumns = []string{`id`, `login_name`}
+
+func (u *U) Columns() []string {
+	return uColumns
+}
+
+func TestImplementsSqlxMeta(t *testing.T) {
+	reQ := require.New(t)
+	m := rx.NewRx[U]()
+	u, e := m.Get(`id=0`)
+	reQ.NoError(e)
+	reQ.Equal(`users`, u.Table())
+	reQ.Equal(uColumns, u.Columns())
+	t.Logf(`Expected User from database: %#v`, u)
+	t.Logf(`Instantiated: %#v`, m)
+}
+
 func TestTryEmbed(t *testing.T) {
 	reQ := require.New(t)
 	ug := new(UserGroup)
@@ -199,7 +230,7 @@ func TestTable(t *testing.T) {
 	if table := m.Table(); table != `a_very_long_and_complex_table_name` {
 		t.Errorf("wrong table '%s'", table)
 	} else {
-		t.Logf("Instantited type: %#v\n TableName: %s\n", m, table)
+		t.Logf("Instantiated type: %#v\n TableName: %s\n", m, table)
 	}
 }
 
@@ -675,7 +706,6 @@ func Fuzz_containsWhere(f *testing.F) {
 	})
 }
 
-// # Examples.
 func ExampleNewRx() {
 	// If no Rowx are passed, NewRx needs a type parameter to know
 	// which type to instantiate for subsequent call to Select(...) or Delete(...)....
@@ -904,6 +934,34 @@ func ExampleRx_Update() {
 
 	// Output:
 	// RowsAffected: 1; err: <nil>
+}
+
+func ExampleSqlxMeta() {
+	// A custom type, which implements rx.SqlxMeta[U].
+	/*
+	   type U struct {
+	   	table     string
+	   	LoginName string
+	   	ID        int32 `rx:"id,auto"`
+	   }
+	   func (u *U) Table() string {
+	   	if u.table == "" {
+	   		u.table = `users`
+	   	}
+	   	return u.table
+	   }
+	   func (u *U) Columns() []string {
+	   	return []string{`id`, `login_name`}
+	   }
+	*/
+	m := rx.NewRx[U]()
+	u, e := m.Get(`id=:id`, U{ID: 1})
+	if e != nil {
+		fmt.Println("Error:", e.Error())
+	}
+	fmt.Printf("ID: %d, LoginName: %s", u.ID, u.LoginName)
+	// Output:
+	// ID: 1, LoginName: first
 }
 
 /*

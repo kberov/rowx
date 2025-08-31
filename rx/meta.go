@@ -73,6 +73,11 @@ type SqlxDeleter[R Rowx] interface {
 SqlxMeta can be implemented to return the name of the table in the database for
 the implementing type and the slice with its column names. It is fully
 implemented by [Rx].
+
+If you implement this interface, its methods will be called by [Rx] everywhere
+where table name or a slice of columns are needed. You can even implement it
+partially, if you want to provide only the table name or only the column names
+to be used by [Rx].
 */
 type SqlxMeta[R Rowx] interface {
 	Table() string

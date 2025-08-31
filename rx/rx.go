@@ -1,9 +1,9 @@
 /*
-Package rx provides a minimalistic object to database-rows mapper and wrapper for
-[sqlx]. It provides interfaces and a generic data type, and implements the
-provided interfaces to work easily with sets of database records. The
-relations' constraints are left to be managed by the database and you. This may
-be improved in a future release.
+Package rx provides a minimalistic object to database-rows mapper and wrapper
+for [sqlx]. It provides functions, interfaces and a generic data type.
+It implements the provided interfaces to work easily with sets of database
+records. The relations' constraints are left to be managed by the database and
+you. This may be improved in a future release.
 
 By default the current implementation assumes that the primary key name is
 `ID`. Of course the primary key can be more than one column and with arbitrary
@@ -58,9 +58,9 @@ var (
 	DriverName = `sqlite3`
 	// DSN must be set before using DB() function. It is set by default to `:memory:`.
 	DSN = `:memory:`
-	// Logger is instantiated (if not instantiated already externally) during
-	// first call of DB() and the log level is set to log.DEBUG.
-	Logger *log.Logger
+	// Logger is always instantiated and the log level is set to log.DEBUG. You
+	// can change the log level as you wish.
+	Logger = newLogger()
 	// ReflectXTag sets the tag name for identifying tags, read and acted upon
 	// by sqlx and Rx.
 	ReflectXTag = `rx`
@@ -69,19 +69,21 @@ var (
 	sprintf  = fmt.Sprintf
 )
 
+func newLogger() (l *log.Logger) {
+	l = log.New(ReflectXTag)
+	l.SetOutput(os.Stderr)
+	l.SetHeader(DefaultLogHeader)
+	l.SetLevel(log.DEBUG)
+	return
+}
+
 /*
-DB  instantiates the [log.Logger], invokes [sqlx.MustConnect] and sets the
-[sqlx.MapperFunc].
+DB invokes [sqlx.MustConnect] and sets the [sqlx.MapperFunc]. [sqlx.DB] is a
+wrapper around [sql.DB].
 */
 func DB() *sqlx.DB {
 	if singleDB != nil {
 		return singleDB
-	}
-	if Logger == nil {
-		Logger = log.New("DB")
-		Logger.SetOutput(os.Stderr)
-		Logger.SetHeader(DefaultLogHeader)
-		Logger.SetLevel(log.DEBUG)
 	}
 	Logger.Debugf("Connecting to database '%s'...", DSN)
 
@@ -92,9 +94,13 @@ func DB() *sqlx.DB {
 
 /*
 Rx implements the [SqlxModel] interface and can be used right away or
-embedded (extended) to customise its behaviour for your own needs.
+embedded (extended) to customise its behavior for your own needs. For example
+you may want to constraint the set of types that can be used with it, by
+providing an interface constraint instead of [Rowx].
 */
 type Rx[R Rowx] struct {
+	// An instance of R which implements the SqlxMeta interface (at least partially).
+	r *R
 	/*
 		data is a slice of rows, retrieved from the database or to be inserted,
 		or updated.
@@ -110,17 +116,27 @@ type Rx[R Rowx] struct {
 	columns []string
 }
 
+var rxRegistry = make(map[string]any, 0)
+
 /*
 NewRx returns a new instance of a table model with optionally provided data
 rows as a variadic parameter. Providing the specific type parameter to
 instantiate is mandatory if it cannot be inferred from the variadic parameter.
 */
 func NewRx[R Rowx](rows ...R) SqlxModel[R] {
-	/*
-		TODO: think of how to implement a type registry so next invocations of NewRx
-		return an already instantiated such type if it was instantiated once.
-	*/
+	typestr := type2str(rowx[R]())
+	if m, ok := rxRegistry[typestr]; ok {
+		if mr, ok := Rowx(m).(SqlxModel[R]); ok {
+			Logger.Debugf(`Reusing %s...`, typestr)
+			// just reset the data
+			mr.SetData(rows)
+			return mr
+		}
+	}
+	Logger.Debugf(`Instantiating %s...`, typestr)
 	m := &Rx[R]{data: rows}
+	m.r = rowx[R]()
+	rxRegistry[typestr] = m
 	return m
 }
 
@@ -140,11 +156,24 @@ func fieldsMap[R Rowx]() *reflectx.StructMap {
 	return DB().Mapper.TypeMap(reflect.ValueOf(rowx[R]()).Type())
 }
 
-// Table returns the converted to snake case name of the type to be used as
-// table name in sql queries.
+/*
+Table returns the converted to snake case name of the type to be used as table
+name in sql queries. If the underlying type implements the method Table from
+[SqlxMeta], the type is instantiated (if not already) and the method is called.
+*/
 func (m *Rx[R]) Table() string {
 	if m.table != "" {
 		return m.table
+	}
+	// an implementing at least partially SqlxMeta type and not implementing SqlxModel
+	if _, ok := Rowx(m.r).(SqlxModel[R]); !ok {
+		if _, ok = Rowx(m.r).(interface{ Table() string }); ok {
+			if m.r == rowx[R]() {
+				m.r = new(R)
+			}
+			m.table = Rowx(m.r).(interface{ Table() string }).Table()
+			return m.table
+		}
 	}
 	m.table = TypeToSnake(rowx[R]())
 	return m.table
@@ -167,12 +196,25 @@ func (m *Rx[R]) SetData(data []R) SqlxModel[R] {
 }
 
 /*
-Columns returns a slice with the names of the table's columns.
+Columns returns a slice with the names of the table's columns. If the underlying
+type implements the method Columns from [SqlxMeta], the type is instantiated
+(if not already) and the method is called.
 */
 func (m *Rx[R]) Columns() []string {
 	if len(m.columns) > 0 {
 		return m.columns
 	}
+	// an implementing at least partially SqlxMeta type and not implementing SqlxModel
+	if _, ok := Rowx(m.r).(SqlxModel[R]); !ok {
+		if _, ok = Rowx(m.r).(interface{ Columns() []string }); ok {
+			if m.r == rowx[R]() {
+				m.r = new(R)
+			}
+			m.columns = Rowx(m.r).(interface{ Columns() []string }).Columns()
+			return m.columns
+		}
+	}
+
 	/*
 	   TODO: Some day... use go:generate to move such code to compile time for
 	   Rowx implementing types. Consider also a solution to (eventually
@@ -237,7 +279,7 @@ transaction. [sql.Result.RowsAffected] will always return 1, because every row
 is inserted in its own statement. This may change in a future release. If there
 are no records to be inserted, [Rx.Insert] panics.
 
-If you need to insert an [Rowx] structure with a specific value for ID, add a
+If you need to insert a [Rowx] structure with a specific value for ID, add a
 tag to the ID column `rx:id,no_auto` or use directly [sqlx].
 
 If you want to skip any field during insert add, a tag to it `rx:field_name,auto`.
@@ -327,11 +369,6 @@ func (m *Rx[R]) Select(where string, bindData any, limitAndOffset ...int) ([]R, 
 		Logger.Debugf("Select q :'%s', args:'%#v', err:'%#v'", query, args, err)
 		return m.data, err
 	}
-	//	if stmt, err := DB().PrepareNamed(query); err != nil {
-	//		return nil, fmt.Errorf("error from DB().PrepareNamed(SQL): %w", err)
-	//	} else if err = stmt.Select(&m.data, bindData); err != nil {
-	//		return nil, fmt.Errorf("error from stmt.Select(&m.data, bindData): %w", err)
-	//	}
 	return m.data, nil
 }
 
@@ -353,7 +390,6 @@ Get executes [sqlx.DB.Get] and returns the result scanned into an instantiated
 [Rowx] object or an error.
 */
 func (m *Rx[R]) Get(where string, bindData ...any) (*R, error) {
-	row := new(R)
 	query := m.renderSelectTemplate(where, []int{1, 0})
 	var (
 		q    string
@@ -365,9 +401,10 @@ func (m *Rx[R]) Get(where string, bindData ...any) (*R, error) {
 	}
 	q, args, err = namedInRebind(query, bindData[0])
 	if err != nil {
-		return row, err
+		return rowx[R](), err
 	}
-	return row, DB().Get(row, q, args...)
+	m.r = new(R)
+	return m.r, DB().Get(m.r, q, args...)
 }
 
 var isWhere = regexp.MustCompile(`(?i:^\s*?where\s)`)

@@ -4,7 +4,6 @@ import (
 	"reflect"
 	"strings"
 	"unicode"
-	"unicode/utf8"
 )
 
 func type2str[R Rowx](row R) string {
@@ -31,33 +30,34 @@ func TypeToSnake[R Rowx](row R) string {
 /*
 CamelToSnake is used to convert type names and structure fields to snake
 case table columns. We pass it to [reflectx.NewMapperFunc] together with
-[ReflectXTag]. The string `UserLastFiveComments` is transformed to
+[ReflectXTag]. For example the string `UserLastFiveComments` is transformed to
 `user_last_five_comments`.
 */
 func CamelToSnake(text string) string {
-	if utf8.RuneCountInString(text) == 2 {
+	runes := []rune(text)
+	if len(runes) == 2 {
 		return strings.ToLower(text)
 	}
 	var snake strings.Builder
 	var begins = true
 	var wasUpper = true
-	for _, r := range text {
-		begins, wasUpper = lowerLetter(&snake, r, begins, wasUpper, "_")
+	for _, r := range runes {
+		begins, wasUpper = lowerLetter(&snake, r, begins, wasUpper)
 	}
 	return snake.String()
 }
 
-func lowerLetter(snake *strings.Builder, r rune, begins, wasUpper bool, connector string) (bool, bool) {
+const connector = '_'
+
+func lowerLetter(snake *strings.Builder, r rune, begins, wasUpper bool) (bool, bool) {
 	if unicode.IsUpper(r) && !begins {
-		snake.WriteString(connector)
+		snake.WriteRune(connector)
 		snake.WriteRune(unicode.ToLower(r))
-		begins, wasUpper = true, true
-		return begins, wasUpper
+		return true, true // begins, wasUpper
 	}
 	if begins && wasUpper {
 		snake.WriteRune(unicode.ToLower(r))
-		begins, wasUpper = false, false
-		return begins, wasUpper
+		return false, false // begins, wasUpper
 	}
 	snake.WriteRune(r)
 	return begins, wasUpper
