@@ -237,7 +237,7 @@ func (m *Rx[R]) Columns() []string {
 	       a. Dabase migration trough executing the prepared SQL file.
 	       b. Disallow requests by showing a static page(Maintenance time -
 	       this should take less than a second).
-	       b. Imediately deploy the static binary. If it is a CGI application,
+	       b. Immediately deploy the static binary. If it is a CGI application,
 	       on the next request the updated binary will run. If it is a running
 	       application (a (web-)service), immediately restart the application.
 
@@ -342,7 +342,7 @@ Select prepares, executes a SELECT statement and returns the collected result
 as a slice. Selected records can also be used with [Rx.Data].
 
   - `where` is expected to contain the `WHERE` clause with potentially subsequent
-    `ORDER BY` clause. the keyword `WHERE` can be omited.
+    `ORDER BY` clause. the keyword `WHERE` can be omitted.
   - `bindData` can be a struct (even unnamed) or map[string]any.
   - `limitAndOffset` is expected to be used as a variadic parameter. If passed,
     it is expected to consist of two values limit and offset - in that order. The
@@ -365,11 +365,7 @@ func (m *Rx[R]) Select(where string, bindData any, limitAndOffset ...int) ([]R, 
 	if err != nil {
 		return nil, err
 	}
-	if err := DB().Select(&m.data, q, args...); err != nil {
-		Logger.Debugf("Select q :'%s', args:'%#v', err:'%#v'", query, args, err)
-		return m.data, err
-	}
-	return m.data, nil
+	return m.data, DB().Select(&m.data, q, args...)
 }
 
 func (m *Rx[R]) renderSelectTemplate(where string, limitAndOffset []int) string {
