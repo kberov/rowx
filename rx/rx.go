@@ -124,7 +124,7 @@ rows as a variadic parameter. Providing the specific type parameter to
 instantiate is mandatory if it cannot be inferred from the variadic parameter.
 */
 func NewRx[R Rowx](rows ...R) SqlxModel[R] {
-	typestr := type2str(rowx[R]())
+	typestr := type2str(nilRowx[R]())
 	if m, ok := rxRegistry[typestr]; ok {
 		if mr, ok := Rowx(m).(SqlxModel[R]); ok {
 			Logger.Debugf(`Reusing %s...`, typestr)
@@ -133,27 +133,31 @@ func NewRx[R Rowx](rows ...R) SqlxModel[R] {
 			return mr
 		}
 	}
-	Logger.Debugf(`Instantiating %s...`, typestr)
 	m := &Rx[R]{data: rows}
-	m.r = rowx[R]()
+	Logger.Debugf(`Instantiated %#v...`, m)
+	m.r = nilRowx[R]()
 	rxRegistry[typestr] = m
 	return m
 }
 
 /*
-rowx returns a (*R)(nil). We use it only for metadata extraction. So we do not
-need to allocate any memory.
+nilRowx returns a (*R)(nil). [Rx] uses it only for metadata extraction. So it
+does not need to allocate any memory. If a [Rowx] structure implements
+[SqlxMeta], it may need to be instantiated. [Rx] does that only if it finds
+that the generic structure implements [SqlxMeta] at least partially. See
+[Columns] and [Table].
 */
-func rowx[R Rowx]() *R {
+func nilRowx[R Rowx]() *R {
 	return (*R)(nil)
 }
 
 /*
 fieldsMap returns a pointer to an instantiated [reflectx.StructMap] for the
-generic structure. It is the cornerstone to implement the SqlxMeta interface.
+generic structure. It is used to scan the tags of the fields and get column
+names and tag options.
 */
 func fieldsMap[R Rowx]() *reflectx.StructMap {
-	return DB().Mapper.TypeMap(reflect.ValueOf(rowx[R]()).Type())
+	return DB().Mapper.TypeMap(reflect.ValueOf(nilRowx[R]()).Type())
 }
 
 /*
@@ -165,17 +169,23 @@ func (m *Rx[R]) Table() string {
 	if m.table != "" {
 		return m.table
 	}
-	// an implementing at least partially SqlxMeta type and not implementing SqlxModel
+	/*
+		An implementing at least partially SqlxMeta type and not implementing
+		SqlxModel (== embeds Rx), because if the current structure embeds Rx, we
+		end up with stackoverflow (because each level starts to call the method
+		Columns() of the embedded Rx, causing endelss recursion).
+	*/
 	if _, ok := Rowx(m.r).(SqlxModel[R]); !ok {
 		if _, ok = Rowx(m.r).(interface{ Table() string }); ok {
-			if m.r == rowx[R]() {
+			if m.r == nilRowx[R]() {
+				Logger.Debugf("Instantiating %#v...", m.r)
 				m.r = new(R)
 			}
 			m.table = Rowx(m.r).(interface{ Table() string }).Table()
 			return m.table
 		}
 	}
-	m.table = TypeToSnake(rowx[R]())
+	m.table = TypeToSnake(nilRowx[R]())
 	return m.table
 }
 
@@ -204,10 +214,16 @@ func (m *Rx[R]) Columns() []string {
 	if len(m.columns) > 0 {
 		return m.columns
 	}
-	// an implementing at least partially SqlxMeta type and not implementing SqlxModel
+	/*
+		An implementing at least partially SqlxMeta type and not implementing
+		SqlxModel (== embeds Rx), because if the current structure embeds Rx, we
+		end up with stackoverflow (because each level starts to call the method
+		Columns() of the embedded Rx, causing endelss recursion).
+	*/
 	if _, ok := Rowx(m.r).(SqlxModel[R]); !ok {
 		if _, ok = Rowx(m.r).(interface{ Columns() []string }); ok {
-			if m.r == rowx[R]() {
+			if m.r == nilRowx[R]() {
+				Logger.Debugf("Instantiating %#v...", m.r)
 				m.r = new(R)
 			}
 			m.columns = Rowx(m.r).(interface{ Columns() []string }).Columns()
@@ -215,36 +231,6 @@ func (m *Rx[R]) Columns() []string {
 		}
 	}
 
-	/*
-	   TODO: Some day... use go:generate to move such code to compile time for
-	   Rowx implementing types. Consider also a solution to (eventually
-	   gradually) regenerate Rx embedding types and recompile the
-	   application due to changes in the database schema. This is how we can
-	   implement database migrations starting from the database.  1. During
-	   development the owner of the user code changes the development database
-	   and runs `go generate && go build -ldflags "-s -w" ./...` to
-	   (re-)generate types which may need to embed Rx. Then recompiles the
-	   application.
-	   2. Next he/she prepares the sql migration file to be run on the
-	   production database. It should not be harmfull if some defined fields in
-	   the Rowx embedding types do not have corresponding columns in the
-	   database, because they will have sane defaults, thanks to Go default
-	   values. Also it will not harm if there are new columns in tables and
-	   some types do not have yet the corresponding field. The only problematic
-	   case is when a column in the database changes its type or a table is
-	   dropped. To cover this case...
-	    3. Deployment.
-	       a. Dabase migration trough executing the prepared SQL file.
-	       b. Disallow requests by showing a static page(Maintenance time -
-	       this should take less than a second).
-	       b. Immediately deploy the static binary. If it is a CGI application,
-	       on the next request the updated binary will run. If it is a running
-	       application (a (web-)service), immediately restart the application.
-
-	   Consider carefully!:
-	   https://stackoverflow.com/questions/55934210/creating-structs-programmatically-at-runtime-possible
-	   https://agirlamonggeeks.com/golang-dynamic-lly-generate-struct/
-	*/
 	colIndex := fieldsMap[R]().Index
 	m.columns = make([]string, 0, len(colIndex))
 	for _, v := range colIndex {
@@ -258,7 +244,7 @@ func (m *Rx[R]) Columns() []string {
 			Logger.Debugf("Skipping field %s; Options %v", v.Field.Name, v.Options)
 			continue
 		}
-		// Nested fields are not columns either. They are used by sqlx for other purposes.
+		// Nested fields are not columns either. They are used for other purposes.
 		if strings.Contains(v.Path, `.`) {
 			continue
 		}
@@ -268,6 +254,38 @@ func (m *Rx[R]) Columns() []string {
 
 	return m.columns
 }
+
+/*
+   TODO: Some day... use go:generate to move such (looping trough field tags)
+   code to compile time for
+   Rowx implementing types. Consider also a solution to (eventually
+   gradually) regenerate Rx embedding types and recompile the
+   application due to changes in the database schema. This is how we can
+   implement database migrations starting from the database.  1. During
+   development the owner of the user code changes the development database
+   and runs `go generate && go build -ldflags "-s -w" ./...` to
+   (re-)generate types which may need to embed Rx. Then recompiles the
+   application.
+   2. Next he/she prepares the sql migration file to be run on the
+   production database. It should not be harmfull if some defined fields in
+   the Rowx embedding types do not have corresponding columns in the
+   database, because they will have sane defaults, thanks to Go default
+   values. Also it will not harm if there are new columns in tables and
+   some types do not have yet the corresponding field. The only problematic
+   case is when a column in the database changes its type or a table is
+   dropped. To cover this case...
+	3. Deployment.
+	   a. Dabase migration trough executing the prepared SQL file.
+	   b. Disallow requests by showing a static page(Maintenance time -
+	   this should take less than a second).
+	   b. Immediately deploy the static binary. If it is a CGI application,
+	   on the next request the updated binary will run. If it is a running
+	   application (a (web-)service), immediately restart the application.
+
+   Consider carefully!:
+   https://stackoverflow.com/questions/55934210/creating-structs-programmatically-at-runtime-possible
+   https://agirlamonggeeks.com/golang-dynamic-lly-generate-struct/
+*/
 
 /*
 Insert inserts a set of Rowx instances (without their primary key values) and
@@ -307,8 +325,10 @@ func (m *Rx[R]) Insert() (sql.Result, error) {
 	placeholders = sprintf("(:%s)", placeholders)
 	// END TODO
 	stash := map[string]any{
-		`columns`:      strings.Join(noAutoColumns, ","),
-		`table`:        m.Table(),
+		`columns`: strings.Join(noAutoColumns, ","),
+		`table`:   m.Table(),
+		// TODO:
+		// `placeholders`: strings.TrimSuffix(strings.Repeat(placeholders+`,`, dataLen), `,`),
 		`placeholders`: placeholders,
 	}
 	query := RenderSQLTemplate(`INSERT`, stash)
@@ -397,7 +417,7 @@ func (m *Rx[R]) Get(where string, bindData ...any) (*R, error) {
 	}
 	q, args, err = namedInRebind(query, bindData[0])
 	if err != nil {
-		return rowx[R](), err
+		return nilRowx[R](), err
 	}
 	m.r = new(R)
 	return m.r, DB().Get(m.r, q, args...)

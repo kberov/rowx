@@ -10,9 +10,10 @@ import (
 	"testing"
 
 	"github.com/jmoiron/sqlx"
-	"github.com/kberov/rowx/rx"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/require"
+
+	"github.com/kberov/rowx/rx"
 )
 
 var schema = `

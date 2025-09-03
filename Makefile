@@ -22,11 +22,11 @@ lint:
 
 test: install_deps
 	$(info ******************** running tests ********************)
-	go test -v ./...
+	go test -failfast -v  ./... -coverprofile=coverage.html	
 
 install_deps:
 	$(info ******************** downloading dependencies ********************)
-	go get -v ./...
+	reset; go get -v ./...
 
 clean:
 	rm -rf $(BIN)
