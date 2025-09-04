@@ -152,9 +152,9 @@ func nilRowx[R Rowx]() *R {
 }
 
 /*
-fieldsMap returns a pointer to an instantiated [reflectx.StructMap] for the
-generic structure. It is used to scan the tags of the fields and get column
-names and tag options.
+fieldsMap returns a pointer to an instantiated and cached [reflectx.StructMap]
+for the generic structure. It is used to scan the tags of the fields and get
+column names and tag options.
 */
 func fieldsMap[R Rowx]() *reflectx.StructMap {
 	return DB().Mapper.TypeMap(reflect.ValueOf(nilRowx[R]()).Type())
@@ -170,10 +170,10 @@ func (m *Rx[R]) Table() string {
 		return m.table
 	}
 	/*
-		An implementing at least partially SqlxMeta type and not implementing
-		SqlxModel (== embeds Rx), because if the current structure embeds Rx, we
-		end up with stackoverflow (because each level starts to call the method
-		Columns() of the embedded Rx, causing endelss recursion).
+		An implementing (at least partially) SqlxMeta type and not implementing
+		SqlxModel (== embeds Rx), because if the underlying structure embeds Rx, we
+		end up with stackoverflow (because each next call enters this if,
+		causing endelss recursion).
 	*/
 	if _, ok := Rowx(m.r).(SqlxModel[R]); !ok {
 		if _, ok = Rowx(m.r).(interface{ Table() string }); ok {
@@ -215,10 +215,10 @@ func (m *Rx[R]) Columns() []string {
 		return m.columns
 	}
 	/*
-		An implementing at least partially SqlxMeta type and not implementing
-		SqlxModel (== embeds Rx), because if the current structure embeds Rx, we
-		end up with stackoverflow (because each level starts to call the method
-		Columns() of the embedded Rx, causing endelss recursion).
+		An implementing (at least partially) SqlxMeta type and not implementing
+		SqlxModel (== embeds Rx), because if the underlying structure embeds Rx, we
+		end up with stackoverflow (because each next call enters this if,
+		causing endelss recursion).
 	*/
 	if _, ok := Rowx(m.r).(SqlxModel[R]); !ok {
 		if _, ok = Rowx(m.r).(interface{ Columns() []string }); ok {

@@ -1,12 +1,12 @@
 module github.com/kberov/rowx
 
-go 1.24.4
+go 1.25.1
 
 require (
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/labstack/gommon v0.4.2
-	github.com/mattn/go-sqlite3 v1.14.22
-	github.com/stretchr/testify v1.8.4
+	github.com/mattn/go-sqlite3 v1.14.32
+	github.com/stretchr/testify v1.11.1
 	github.com/valyala/fasttemplate v1.2.2
 )
 

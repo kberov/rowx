@@ -26,7 +26,7 @@ test: install_deps
 
 install_deps:
 	$(info ******************** downloading dependencies ********************)
-	reset; go get -v ./...
+	go get -v ./...
 
 clean:
 	rm -rf $(BIN)
