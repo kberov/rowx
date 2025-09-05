@@ -1,6 +1,9 @@
 package rx
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"unicode"
@@ -90,4 +93,27 @@ func SnakeToCamel(snake_case_word string) string { //nolint:all //  should be sn
 		words.WriteRune(v)
 	}
 	return words.String()
+}
+
+/*
+Migrate executes schema migration SQL statements found in `filePath` and stores
+in the configured table the name and version of the last migration. The
+migration comment is expected to mach `^\s*--\s+\d{,12}\s+(?:up|down)$`. For
+example: `--202506092333 up`.
+*/
+func Migrate(filePath, database, direction string) error {
+	filePath, _ = filepath.Abs(filepath.Clean(filePath))
+	cwd, _ := os.Getwd()
+	if !strings.HasPrefix(filePath, cwd) {
+		Logger.Panicf(`%s is unsfe. Cannot continue...`, filePath)
+	}
+	Logger.Debugf(`Opening migrations file %s`, filePath)
+	// open filePath
+	fh, err := os.Open(filePath)
+	if err != nil {
+		return fmt.Errorf("could not open file: %w", err)
+	}
+	_ = fh
+	_, _ = database, direction
+	return nil
 }

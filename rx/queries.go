@@ -24,6 +24,14 @@ var (
 		`SELECT`: `SELECT ${columns} FROM ${table} ${WHERE} LIMIT ${limit} OFFSET ${offset}`,
 		`UPDATE`: `UPDATE ${table} ${SET} ${WHERE}`,
 		`DELETE`: `DELETE FROM ${table} ${WHERE}`,
+		`MIGRATIONSTABLE`: `
+CREATE TABLE IF NOT EXISTS rx_migrations (
+	version TEXT NOT NULL,
+	direction TEXT NOT NULL,
+	applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+	UNIQUE(version, direction)
+)`,
+		`INSERT_APPLIED_MIGRATION`: `INSERT INTO rx_migrations(version, direction) VALUES(:version, :direction)`,
 	}
 	replace = fasttemplate.ExecuteStringStd
 )
