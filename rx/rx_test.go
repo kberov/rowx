@@ -259,20 +259,20 @@ func TestCamelToSnake(t *testing.T) {
 
 func TestSnakeToCamel(t *testing.T) {
 	tests := []struct {
-		name              string
-		tableOrColumnName string
-		typeOrFieldName   string
+		name          string
+		tableOrColumn string
+		typeOrField   string
 	}{
-		{name: `long`, tableOrColumnName: `a_very_long_and_complex_table_name`, typeOrFieldName: `AVeryLongAndComplexTableName`},
-		{name: `short`, tableOrColumnName: `id`, typeOrFieldName: `ID`},
-		{name: `longUtf8`, tableOrColumnName: `и_още_една_невъзможна_таблица`, typeOrFieldName: `ИОщеЕднаНевъзможнаТаблица`},
-		{name: `късутф8`, tableOrColumnName: `ид`, typeOrFieldName: `ИД`},
+		{name: `long`, tableOrColumn: `a_very_long_and_complex_table_name`, typeOrField: `AVeryLongAndComplexTableName`},
+		{name: `short`, tableOrColumn: `id`, typeOrField: `ID`},
+		{name: `longUtf8`, tableOrColumn: `и_още_една_невъзможна_таблица`, typeOrField: `ИОщеЕднаНевъзможнаТаблица`},
+		{name: `късутф8`, tableOrColumn: `ид`, typeOrField: `ИД`},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			require.Equalf(t, tc.typeOrFieldName, rx.SnakeToCamel(tc.tableOrColumnName),
-				`SnakeToCamel("%s") should return "%s"`, tc.tableOrColumnName, tc.typeOrFieldName)
-			t.Logf(`SnakeToCamel("%s") returns "%s"`, tc.tableOrColumnName, tc.typeOrFieldName)
+			require.Equalf(t, tc.typeOrField, rx.SnakeToCamel(tc.tableOrColumn),
+				`SnakeToCamel("%s") should return "%s"`, tc.tableOrColumn, tc.typeOrField)
+			t.Logf(`SnakeToCamel("%s") returns "%s"`, tc.tableOrColumn, tc.typeOrField)
 		})
 	}
 }

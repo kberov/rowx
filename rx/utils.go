@@ -77,17 +77,17 @@ func SnakeToCamel(snake_case_word string) string { //nolint:all //  should be sn
 	nextUp := false
 
 	words.WriteRune(unicode.ToUpper(runes[0]))
-	for i := 1; i < len(runes); i++ {
-		if runes[i] == '_' {
+	for _, v := range runes[1:] {
+		if v == '_' {
 			nextUp = true
 			continue
 		}
 		if nextUp {
-			words.WriteRune(unicode.ToUpper(runes[i]))
+			words.WriteRune(unicode.ToUpper(v))
 			nextUp = false
 			continue
 		}
-		words.WriteRune(runes[i])
+		words.WriteRune(v)
 	}
 	return words.String()
 }
