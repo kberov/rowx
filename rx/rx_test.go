@@ -83,7 +83,6 @@ func multiExec(e sqlx.Execer, query string) {
 		}
 	}
 }
-
 func init() {
 	// rx.DSN = ":memory:"
 	// rx.DriverName = `sqlite3`
@@ -471,6 +470,7 @@ var testsForTestUpdate = []struct {
 	},
 }
 
+//nolint:gocognit
 func TestUpdate(t *testing.T) {
 	for i, tc := range testsForTestUpdate {
 		t.Run(tc.name, func(t *testing.T) {
@@ -789,7 +789,7 @@ func ExampleRx_Columns() {
 		Author string
 		Body   string
 		ID     uint32
-		//...
+		// ...
 	}
 
 	b := Books{Title: `Нова земя`, Author: `Иванъ Вазовъ`, Body: `По стръмната южна урва на Амбарица...`}

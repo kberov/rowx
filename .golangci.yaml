@@ -3,22 +3,23 @@
 version: "2"
 linters:
   enable:
-    - govet
-    - revive
-    - errcheck
-    - staticcheck
+    # For when I decide to deal with some TODO: or FIXME:
+    # - godox
+    - copyloopvar
     - dupl
+    - errcheck
     - exptostd
     - funcorder
     - funlen
     - gocognit
+    - gocritic
     - gocyclo
     - godot
-    # For when I decide to deal with some TODO: or FIXME:
-    # - godox
     - gosec
+    - govet
     - iface
     - importas
+    - inamedparam
     - interfacebloat
     - intrange
     - maintidx
@@ -27,6 +28,9 @@ linters:
     - perfsprint
     - prealloc
     - predeclared
+    - revive
+    - sqlclosecheck
+    - staticcheck
     - testableexamples
     - testpackage
     - usestdlibvars
@@ -41,4 +45,20 @@ linters:
         # https://en.wikipedia.org/wiki/Data_structure_alignment
         # https://go.dev/src/go/types/sizes.go
         # - fieldalignment
+    errcheck:
+      # See https://github.com/kisielk/errcheck#excluding-functions
+      exclude-functions:
+        - (*os.File).Close
+        - (*sqlx.Tx).Rollback
 
+    gocognit:
+      # Minimal code complexity to report.
+      # Default: 30 (but we recommend 10-20)
+      min-complexity: 15
+    gosec:
+      # To specify a set of rules to explicitly exclude.
+      # Available rules: https://github.com/securego/gosec#available-rules
+      # Default: []
+      excludes:
+        # But (*strings.Builder).WriteString() returns always a nil error.
+        - G104 # Audit errors not checked

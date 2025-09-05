@@ -48,18 +48,25 @@ import (
 	"github.com/labstack/gommon/log"
 )
 
+const (
+	// DefaultLimit is the default LIMIT for SQL queries.
+	DefaultLimit = 100
+	// DriverName is the name of the database engine to use. For now we only
+	// support `sqlite3`. Support for PostreSQL and MySQL is planned.
+	DriverName = `sqlite3`
+	// MigrationsTable is where we keep information about executed schema
+	// migrations.
+	MigrationsTable = `rx_migrations`
+)
+
 var (
 	// DefaultLogHeader is a template for rx logging.
 	DefaultLogHeader = `${prefix}:${level}:${short_file}:${line}`
-	// DefaultLimit is the default LIMIT for SQL queries.
-	DefaultLimit = 100
-	// DriverName is the name of the database engine to use. It is set by
-	// default to `sqlite3`.
-	DriverName = `sqlite3`
 	// DSN must be set before using DB() function. It is set by default to `:memory:`.
 	DSN = `:memory:`
 	// Logger is always instantiated and the log level is set to log.DEBUG. You
-	// can change the log level as you wish.
+	// can change the log level as you wish. We use
+	// `github.com/labstack/gommon/log` as logging engine.
 	Logger = newLogger()
 	// ReflectXTag sets the tag name for identifying tags, read and acted upon
 	// by sqlx and Rx.
@@ -79,7 +86,10 @@ func newLogger() (l *log.Logger) {
 
 /*
 DB invokes [sqlx.MustConnect] and sets the [sqlx.MapperFunc]. [sqlx.DB] is a
-wrapper around [sql.DB].
+wrapper around [sql.DB]. A DB instance is not a connection, but an abstraction
+representing a Database. This is why creating a DB does not return an error and
+will not panic. It maintains a connection pool internally, and will attempt to
+connect when a connection is first needed.
 */
 func DB() *sqlx.DB {
 	if singleDB != nil {
@@ -307,6 +317,16 @@ func (m *Rx[R]) Insert() (sql.Result, error) {
 	if dataLen == 0 {
 		Logger.Panic("Cannot insert, when no data is provided!")
 	}
+	query := m.renderInsertQuery()
+	Logger.Debugf("Rendered query: %s", query)
+	if dataLen > 1 {
+		return m.insertMany(query)
+	}
+	Logger.Debugf("Inserting row: %+v", m.data[0])
+	return DB().NamedExec(query, m.data[0])
+}
+
+func (m *Rx[R]) renderInsertQuery() string {
 	// TODO: Think of caching noAutoColumns (and use go:generate for all metadata)
 	noAutoColumns := make([]string, 0, len(m.Columns())-1)
 	names := fieldsMap[R]().Names
@@ -332,29 +352,29 @@ func (m *Rx[R]) Insert() (sql.Result, error) {
 		`placeholders`: placeholders,
 	}
 	query := RenderSQLTemplate(`INSERT`, stash)
-	Logger.Debugf("Rendered query: %s", query)
-	if dataLen > 1 {
-		var (
-			tx *sqlx.Tx
-			r  sql.Result
-			e  error
-		)
-		tx = DB().MustBegin()
-		// The rollback will be ignored if the tx has been committed already.
-		defer func() { _ = tx.Rollback() }()
-		for _, row := range m.Data() {
-			// Logger.Debugf("Inserting row: %+v", row)
-			r, e = tx.NamedExec(query, row)
-			if e != nil {
-				return r, e
-			}
-		}
-		if e = tx.Commit(); e != nil {
+	return query
+}
+
+func (m *Rx[R]) insertMany(query string) (sql.Result, error) {
+	var (
+		tx *sqlx.Tx
+		r  sql.Result
+		e  error
+	)
+	tx = DB().MustBegin()
+	// The rollback will be ignored if the tx has been committed already.
+	defer func() { _ = tx.Rollback() }()
+	for _, row := range m.Data() {
+		// Logger.Debugf("Inserting row: %+v", row)
+		r, e = tx.NamedExec(query, row)
+		if e != nil {
 			return r, e
 		}
+	}
+	if e = tx.Commit(); e != nil {
 		return r, e
 	}
-	return DB().NamedExec(query, m.data[0])
+	return r, e
 }
 
 /*
@@ -496,6 +516,7 @@ func (m *Rx[R]) Update(fields []string, where string) (sql.Result, error) {
 	if e != nil {
 		return nil, e
 	}
+	defer func() { _ = namedStmt.Close() }()
 	for _, row := range m.Data() {
 		Logger.Debugf("Update row: %+v;", row)
 		r, e = namedStmt.Exec(row)
@@ -522,10 +543,7 @@ func (m *Rx[R]) Delete(where string, bindData any) (sql.Result, error) {
 		bindData = map[string]any{}
 	}
 	query := RenderSQLTemplate(`DELETE`, stash)
-	Logger.Debugf("Constructed query : %s", query)
+	Logger.Debugf("Constructed DELETE query : %s", query)
 
 	return DB().NamedExec(query, bindData)
 }
-
-/*
- */

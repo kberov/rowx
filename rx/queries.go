@@ -22,8 +22,18 @@ var (
 	QueryTemplates = SQLMap{
 		`INSERT`: `INSERT INTO ${table} (${columns}) VALUES ${placeholders}`,
 		`SELECT`: `SELECT ${columns} FROM ${table} ${WHERE} LIMIT ${limit} OFFSET ${offset}`,
+		`GET`:    `SELECT ${columns} FROM ${table} ${WHERE} LIMIT 1`,
 		`UPDATE`: `UPDATE ${table} ${SET} ${WHERE}`,
 		`DELETE`: `DELETE FROM ${table} ${WHERE}`,
+		`CREATE_MIGRATIONS_TABLE`: `
+CREATE TABLE IF NOT EXISTS ${table} (
+	version UNSIGNED INT NOT NULL,
+	direction VARCHAR(4) NOT NULL CHECK(direction IN('up', 'down')),
+	file_path TEXT NOT NULL,
+	applied TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+	UNIQUE(version, direction)
+)`,
+		`INSERT_APPLIED_MIGRATION`: `INSERT INTO ${table}(version, direction) VALUES(:version, :direction,file_path)`,
 	}
 	replace = fasttemplate.ExecuteStringStd
 )

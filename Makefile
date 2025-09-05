@@ -18,7 +18,7 @@ fmt:
 
 lint:
 	$(info ******************** running lint tools ********************)
-	golangci-lint run -v
+	golangci-lint run # -v
 
 test: install_deps
 	$(info ******************** running tests ********************)
