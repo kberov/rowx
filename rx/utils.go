@@ -1,9 +1,20 @@
 package rx
 
 import (
+	"bufio"
+	"database/sql"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
+	"regexp"
+	"slices"
 	"strings"
+	"time"
 	"unicode"
+
+	"github.com/jmoiron/sqlx"
 )
 
 func type2str[R Rowx](row R) string {
@@ -77,17 +88,200 @@ func SnakeToCamel(snake_case_word string) string { //nolint:all //  should be sn
 	nextUp := false
 
 	words.WriteRune(unicode.ToUpper(runes[0]))
-	for i := 1; i < len(runes); i++ {
-		if runes[i] == '_' {
+	for _, v := range runes[1:] {
+		if v == '_' {
 			nextUp = true
 			continue
 		}
 		if nextUp {
-			words.WriteRune(unicode.ToUpper(runes[i]))
+			words.WriteRune(unicode.ToUpper(v))
 			nextUp = false
 			continue
 		}
-		words.WriteRune(runes[i])
+		words.WriteRune(v)
 	}
 	return words.String()
+}
+
+type dir uint8
+
+const (
+	up dir = iota
+	down
+)
+
+var migrationsLabels = [...]string{`up`, `down`}
+
+func (d dir) String() string {
+	return migrationsLabels[d]
+}
+
+/*
+Migrate executes all not applied schema migrations with the given `direction`,
+found in `filePath` and stores in [MigrationsTable] the version, direction and
+file path of every applied migration. The migrations comments (headers) are
+expected to mach `^--\s*(\d{1,12})\s*(up|down)$`. For example: `--202506092333
+up`. All SQL statements except the last must end with semicolumn -- `;` as it
+is used to split the migartion into separate statements to be executed. Each
+migration is executed in a transaction. The migrations are applied sequentially
+in the order they appear in the file.
+
+If the `direction` is `up` the migrations are applied in ascending order.
+
+If the `direction` is `down` the migrations are applied in desscending order.
+
+The explained workflow allows to have more than one migration for logically
+different parts of the application. For example different modules have their
+own different migrations but they in some cases have to be applied in one run -
+a new release.
+*/
+func Migrate(filePath, dsn, direction string) error {
+	if unknown(direction) {
+		return fmt.Errorf(`direction can be only '%s' or '%s'`, up, down)
+	}
+	/*
+		FIXME: dangerous!!! we assume here that DB() was not invoked yet and
+		Migrate is called from a main() function. What if it is a called from a
+		long-running process? We need another separate singleDB.
+	*/
+	DSN = dsn
+	DB().MustExec(RenderSQLTemplate(`CREATE_MIGRATIONS_TABLE`, SQLMap{`table`: MigrationsTable}))
+
+	migrations, err := parseMigrationFile(filePath)
+	if direction == down.String() {
+		slices.Reverse(migrations)
+	}
+	for i, v := range migrations {
+		if v.Direction != direction {
+			Logger.Debugf(`Skipping %d . %s|%s %s ...`,
+				i+1, v.Version, v.Direction, v.Statements.String()[:40])
+			continue
+		}
+		Logger.Debugf(`Applying %d . %s|%s %s ...`,
+			i+1, v.Version, v.Direction, v.Statements.String()[:40])
+
+		if err = multiExec(DB(), v.Statements.String()); err != nil {
+			return err
+		}
+		if _, err = NewRx(Migrations{
+			Version:   v.Version,
+			Direction: v.Direction,
+			FilePath:  filePath,
+		}).Insert(); err != nil {
+			return err
+		}
+	}
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func unknown(direction string) bool {
+	return direction != up.String() && direction != down.String()
+}
+
+/*
+multiExec was stollen from sqlx_test.go and slightly modified as a poor's man
+migration. It executes all stementss found in a big multy query string ias one
+transaction.
+*/
+func multiExec(db *sqlx.DB, query string) (err error) {
+	stmts := strings.Split(query, ";")
+	if len(strings.Trim(stmts[len(stmts)-1], " \n\t\r")) == 0 {
+		stmts = stmts[:len(stmts)-1]
+	}
+	tx := db.MustBegin()
+	// The rollback will be ignored if the tx has been committed already.
+	defer func() { _ = tx.Rollback() }()
+
+	for i, s := range stmts {
+		s = strings.Trim(s, " \n\t\r")
+		if len(s) == 0 {
+			continue
+		}
+		Logger.Infof("Exec statement %02d: %s", i+1, s)
+		_, err = tx.Exec(s)
+		if err != nil {
+			return fmt.Errorf(`%s: %s`, err.Error(), s)
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	return
+}
+
+// Migrations is an object, mapped to [MigrationsTable].
+type Migrations struct {
+	Applied   time.Time `rx:"applied,auto"`
+	Version   string
+	Direction string
+	FilePath  string
+}
+
+// Table returns the table for [Migrations].
+func (r *Migrations) Table() string {
+	return MigrationsTable
+}
+
+type migration struct {
+	Version    string
+	Direction  string
+	Statements strings.Builder
+}
+
+func parseMigrationFile(filePath string) (migrations []migration, err error) {
+	migrations = make([]migration, 0)
+	filePath, _ = filepath.Abs(filepath.Clean(filePath))
+	cwd, _ := os.Getwd()
+	if !strings.HasPrefix(filePath, cwd) {
+		Logger.Panicf(`%s is unsafe. Cannot continue...`, filePath)
+	}
+	Logger.Debugf(`Opening migrations file %s`, filePath)
+	fh, err := os.Open(filePath)
+	if err != nil {
+		return migrations, err
+	}
+	defer fh.Close()
+	versionIsApplied := false
+	currentVersion := ``
+	scanner := bufio.NewScanner(fh)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if version, direction := parseMigrationHeader(line); version != `` && direction != `` {
+			_, err = NewRx[Migrations]().Get(
+				`version=:ver AND direction =:dir`, SQLMap{`ver`: version, `dir`: direction})
+			// If this migration is not found, we must start collecting its
+			// lines to apply it.
+			if err != nil && errors.Is(err, sql.ErrNoRows) {
+				versionIsApplied = false
+				currentVersion = version
+				migrations = append(migrations,
+					migration{Version: currentVersion, Direction: direction})
+			} else if err == nil {
+				versionIsApplied = true
+			}
+			continue
+		}
+		// Do not collect anything until a header is found or if this verion is
+		// already applied.
+		if currentVersion == `` || versionIsApplied {
+			continue
+		}
+		// else collect migrations
+		migrations[len(migrations)-1].Statements.WriteString(line)
+		migrations[len(migrations)-1].Statements.WriteString("\n")
+	}
+	return migrations, nil
+}
+
+var migrationHeader = regexp.MustCompile(`^--\s*(\d{1,12})\s*(up|down)$`)
+
+func parseMigrationHeader(line string) (version, direction string) {
+	matches := migrationHeader.FindStringSubmatch(line)
+	if len(matches) == 3 {
+		return matches[1], matches[2]
+	}
+	return
 }

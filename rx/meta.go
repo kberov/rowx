@@ -15,7 +15,7 @@ Rx to get automatically its implementation and override some of its
 methods.
 */
 type SqlxModel[R Rowx] interface {
-	SetData([]R) SqlxModel[R]
+	SetData(data []R) (rx SqlxModel[R])
 	SqlxInserter[R]
 	SqlxSelector[R]
 	SqlxUpdater[R]
@@ -29,6 +29,11 @@ implemented by [Rx].
 type SqlxInserter[R Rowx] interface {
 	Data() []R
 	SqlxMeta[R]
+	/*
+	   Insert inserts a set of Rowx instances (without their primary key values) and
+	   returns [sql.Result] and [error]. The value for the autoincremented primary key
+	   (usually ID column) is left to be set by the database.
+	*/
 	Insert() (sql.Result, error)
 }
 
@@ -39,7 +44,7 @@ implemented by [Rx].
 type SqlxUpdater[R Rowx] interface {
 	Data() []R
 	Table() string
-	Update([]string, string) (sql.Result, error)
+	Update(fields []string, where string) (sql.Result, error)
 }
 
 /*
@@ -48,7 +53,10 @@ fully implemented by [Rx].
 */
 type SqlxGetter[R Rowx] interface {
 	SqlxMeta[R]
-	Get(string, ...any) (*R, error)
+	/*
+		Get expects a string to be used as where clause and optional bindata (struct or map[string]any).
+	*/
+	Get(where string, binData ...any) (*R, error)
 }
 
 /*
@@ -57,7 +65,7 @@ is fully implemented by [Rx].
 */
 type SqlxSelector[R Rowx] interface {
 	SqlxGetter[R]
-	Select(string, any, ...int) ([]R, error)
+	Select(where string, binData any, limitAndOffset ...int) ([]R, error)
 }
 
 /*
@@ -66,7 +74,7 @@ fully implemented by [Rx].
 */
 type SqlxDeleter[R Rowx] interface {
 	Table() string
-	Delete(string, any) (sql.Result, error)
+	Delete(where string, binData any) (sql.Result, error)
 }
 
 /*
