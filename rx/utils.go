@@ -121,19 +121,19 @@ Migrate executes all not applied schema migrations with the given `direction`,
 found in `filePath` and stores in [MigrationsTable] the version, direction and
 file path of every applied migration. The migrations comments (headers) are
 expected to mach `^--\s*(\d{1,12})\s*(up|down)$`. For example: `--202506092333
-up`. All SQL statements except the last must end with semicolumn -- `;` as it
-is used to split the migartion into separate statements to be executed. Each
-migration is executed in a transaction. The migrations are applied sequentially
-in the order they appear in the file.
+up`. All SQL statements must end with semicolumn -- `;`. It is used to split
+the migartion into separate statements to be executed. Each migration is
+executed in a transaction. The migrations are applied sequentially in the order
+they appear in the file.
 
 If the `direction` is `up` the migrations are applied in ascending order.
 
 If the `direction` is `down` the migrations are applied in desscending order.
 
-The explained workflow allows to have more than one migration for logically
-different parts of the application. For example different modules have their
-own different migrations but they in some cases have to be applied in one run -
-a new release.
+The explained workflow allows to have more than one migration in the same file
+for logically different parts of the application. For example different modules
+have their own different migrations but they in some cases have to be applied
+in one run - a new release.
 */
 func Migrate(filePath, dsn, direction string) error {
 	if unknown(direction) {
@@ -153,8 +153,7 @@ func Migrate(filePath, dsn, direction string) error {
 	}
 	for i, v := range migrations {
 		if v.Direction != direction {
-			Logger.Debugf(`Skipping %d . %s|%s %s ...`,
-				i+1, v.Version, v.Direction, v.Statements.String()[:40])
+			Logger.Debugf(`Skipping not applicable direction %s %s: %s ...`, v.Version, v.Direction, v.Statements.String()[:30])
 			continue
 		}
 		Logger.Debugf(`Applying %d . %s|%s %s ...`,
@@ -188,7 +187,7 @@ transaction.
 */
 func multiExec(db *sqlx.DB, query string) (err error) {
 	stmts := strings.Split(query, ";")
-	if len(strings.Trim(stmts[len(stmts)-1], " \n\t\r")) == 0 {
+	if len(strings.TrimSpace(stmts[len(stmts)-1])) == 0 {
 		stmts = stmts[:len(stmts)-1]
 	}
 	tx := db.MustBegin()
@@ -196,11 +195,11 @@ func multiExec(db *sqlx.DB, query string) (err error) {
 	defer func() { _ = tx.Rollback() }()
 
 	for i, s := range stmts {
-		s = strings.Trim(s, " \n\t\r")
+		s = strings.TrimSpace(s)
 		if len(s) == 0 {
 			continue
 		}
-		Logger.Infof("Exec statement %02d: %s", i+1, s)
+		Logger.Infof("Exec %02d: %s", i+1, s)
 		_, err = tx.Exec(s)
 		if err != nil {
 			return fmt.Errorf(`%s: %s`, err.Error(), s)
@@ -244,6 +243,7 @@ func parseMigrationFile(filePath string) (migrations []migration, err error) {
 		return migrations, err
 	}
 	defer fh.Close()
+
 	versionIsApplied := false
 	currentVersion := ``
 	scanner := bufio.NewScanner(fh)
@@ -252,8 +252,8 @@ func parseMigrationFile(filePath string) (migrations []migration, err error) {
 		if version, direction := parseMigrationHeader(line); version != `` && direction != `` {
 			_, err = NewRx[Migrations]().Get(
 				`version=:ver AND direction =:dir`, SQLMap{`ver`: version, `dir`: direction})
-			// If this migration is not found, we must start collecting its
-			// lines to apply it.
+			// If this migration is not found in the applied migrations, we
+			// must start collecting its lines to apply it.
 			if err != nil && errors.Is(err, sql.ErrNoRows) {
 				versionIsApplied = false
 				currentVersion = version

@@ -33,7 +33,6 @@ CREATE TABLE IF NOT EXISTS ${table} (
 	applied TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 	UNIQUE(version, direction)
 )`,
-		`INSERT_APPLIED_MIGRATION`: `INSERT INTO ${table}(version, direction) VALUES(:version, :direction,file_path)`,
 	}
 	replace = fasttemplate.ExecuteStringStd
 )

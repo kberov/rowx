@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/jmoiron/sqlx"
+	"github.com/labstack/gommon/log"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/require"
 
@@ -83,9 +84,9 @@ func multiExec(e sqlx.Execer, query string) {
 		}
 	}
 }
+
 func init() {
-	// rx.DSN = ":memory:"
-	// rx.DriverName = `sqlite3`
+	rx.Logger.SetLevel(log.INFO)
 	multiExec(rx.DB(), schema)
 }
 
@@ -643,6 +644,13 @@ func TestPanics(t *testing.T) {
 				rx.TypeToSnake(r)
 			},
 		},
+		{
+			name: `Migrate_unsafe_path`,
+			fn: func() {
+				dsn := rx.DSN // `testdata/migrate_test.sqlite`
+				_ = rx.Migrate(`../../../testdata/migrations_01.sql`, dsn, `down`)
+			},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -662,13 +670,54 @@ func expectPanic(t *testing.T, f func()) {
 	f()
 }
 
+func TestMigrate_up(t *testing.T) {
+	rx.ResetDB()
+	rx.ResetDB() // singleDB is now nil, but we want to cover more code.
+	reQ := require.New(t)
+	dsn := rx.DSN // `testdata/migrate_test.sqlite`
+	err := rx.Migrate(`testdata/migr.sql`, dsn, `up`)
+	reQ.ErrorContains(err, `no such file or directory`)
+
+	err = rx.Migrate(`testdata/migrations_01.sql`, dsn, `up`)
+	reQ.NoErrorf(err, `Unexpected error during migration: %v`, err)
+	// now all migrations, found in migrations_01 must be registered as applied
+	// in rx.MigrationsTable
+	rxM := rx.NewRx[rx.Migrations]()
+	appliedMigrations, err := rxM.Select(`direction=:dir`, rx.SQLMap{`dir`: `up`})
+	reQ.NoErrorf(err, `Unexpected error during Select: %v`, err)
+	reQ.Equal(2, len(appliedMigrations))
+	t.Log(`Repeating rx.Migrate must be idempotent!`)
+	err = rx.Migrate(`testdata/migrations_01.sql`, dsn, `up`)
+	reQ.NoErrorf(err, `Unexpected error during repeated migration: %v`, err)
+	appliedMigrations, err = rxM.Select(`direction=:dir`, rx.SQLMap{`dir`: `up`})
+	reQ.NoErrorf(err, `Unexpected error during Select: %v`, err)
+	reQ.Equal(2, len(appliedMigrations))
+}
+
+func TestMigrate_down(t *testing.T) {
+	reQ := require.New(t)
+	dsn := rx.DSN // `testdata/migrate_test.sqlite`
+	err := rx.Migrate(`testdata/migrations_01.sql`, dsn, `down`)
+	reQ.NoErrorf(err, `Unexpected error during migration: %v`, err)
+}
+
+func TestMigrate_left(t *testing.T) {
+	reQ := require.New(t)
+	dsn := rx.DSN // `testdata/migrate_test.sqlite`
+	err := rx.Migrate(`testdata/migrations_01.sql`, dsn, `left`)
+	t.Log(err.Error())
+	reQ.ErrorContains(err, `direction can be only`)
+}
+
+// TestResetDB resets the database it self, while rx.ResetDB resets the
+// connection only (which should drop the whole :memory: database).
 func TestResetDB(t *testing.T) {
 	drops := `
 PRAGMA foreign_keys = OFF;
-DROP TABLE users;
-DROP TABLE user_group;
-DROP TABLE groups;
-DROP TABLE foo;
+DROP TABLE IF EXISTS users;
+DROP TABLE IF EXISTS user_group;
+DROP TABLE IF EXISTS groups;
+DROP TABLE IF EXISTS foo;
 `
 	multiExec(rx.DB(), drops)
 	multiExec(rx.DB(), schema)
@@ -964,6 +1013,3 @@ func ExampleSqlxMeta() {
 	// Output:
 	// ID: 1, LoginName: first
 }
-
-/*
- */

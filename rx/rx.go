@@ -87,9 +87,9 @@ func newLogger() (l *log.Logger) {
 /*
 DB invokes [sqlx.MustConnect] and sets the [sqlx.MapperFunc]. [sqlx.DB] is a
 wrapper around [sql.DB]. A DB instance is not a connection, but an abstraction
-representing a Database. This is why creating a DB does not return an error and
-will not panic. It maintains a connection pool internally, and will attempt to
-connect when a connection is first needed.
+representing a Database. This is why creating a *sqlx.DB does not return an
+error and will not panic. It maintains a connection pool internally, and will
+attempt to connect when a connection is first needed.
 */
 func DB() *sqlx.DB {
 	if singleDB != nil {
@@ -100,6 +100,20 @@ func DB() *sqlx.DB {
 	singleDB = sqlx.MustConnect(DriverName, DSN)
 	singleDB.Mapper = reflectx.NewMapperFunc(ReflectXTag, CamelToSnake)
 	return singleDB
+}
+
+/*
+ResetDB closes the connection to the database and undefines the underlying
+variable, holding the connection.
+*/
+func ResetDB() {
+	if singleDB == nil {
+		return
+	}
+	if err := singleDB.Close(); err != nil {
+		Logger.Errorf(`connection closed unsuccesfully: %s`, err.Error())
+	}
+	singleDB = nil
 }
 
 /*

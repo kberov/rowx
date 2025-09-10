@@ -23,6 +23,7 @@ lint:
 test: install_deps
 	$(info ******************** running tests ********************)
 	go test -failfast -v  ./... -coverprofile=coverage.html	
+	go tool cover -html=coverage.html
 
 install_deps:
 	$(info ******************** downloading dependencies ********************)

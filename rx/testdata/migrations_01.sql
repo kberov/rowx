@@ -262,6 +262,7 @@ VALUES (
       0, 'начало', '', 1523807733, 'text', 'title', 0,
       'Slovo, Слово', 'bg', 0, 0, 'начало, home', 'Слово', 0);
 
+               
 
 -- 201804302200 down
 DROP TABLE IF EXISTS domove;
