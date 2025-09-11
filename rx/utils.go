@@ -110,10 +110,8 @@ const (
 	down
 )
 
-var migrationsLabels = [...]string{`up`, `down`}
-
 func (d dir) String() string {
-	return migrationsLabels[d]
+	return [...]string{`up`, `down`}[d]
 }
 
 /*
@@ -231,22 +229,16 @@ type migration struct {
 }
 
 func parseMigrationFile(filePath string) (migrations []migration, err error) {
-	migrations = make([]migration, 0)
-	filePath, _ = filepath.Abs(filepath.Clean(filePath))
-	cwd, _ := os.Getwd()
-	if !strings.HasPrefix(filePath, cwd) {
-		Logger.Panicf(`%s is unsafe. Cannot continue...`, filePath)
-	}
-	Logger.Debugf(`Opening migrations file %s`, filePath)
-	fh, err := os.Open(filePath)
+	fh, err := safeOpen(filePath)
 	if err != nil {
 		return migrations, err
 	}
 	defer fh.Close()
 
+	scanner := bufio.NewScanner(fh)
+	migrations = make([]migration, 0)
 	versionIsApplied := false
 	currentVersion := ``
-	scanner := bufio.NewScanner(fh)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if version, direction := parseMigrationHeader(line); version != `` && direction != `` {
@@ -276,6 +268,16 @@ func parseMigrationFile(filePath string) (migrations []migration, err error) {
 	return migrations, nil
 }
 
+func safeOpen(filePath string) (*os.File, error) {
+	filePath, _ = filepath.Abs(filepath.Clean(filePath))
+	cwd, _ := os.Getwd()
+	if !strings.HasPrefix(filePath, cwd) {
+		Logger.Panicf(`%s is unsafe. Cannot continue...`, filePath)
+	}
+	Logger.Debugf(`Opening migrations file %s`, filePath)
+	return os.Open(filePath)
+}
+
 var migrationHeader = regexp.MustCompile(`^--\s*(\d{1,12})\s*(up|down)$`)
 
 func parseMigrationHeader(line string) (version, direction string) {
@@ -284,4 +286,35 @@ func parseMigrationHeader(line string) (version, direction string) {
 		return matches[1], matches[2]
 	}
 	return
+}
+
+/*
+Generate generates structures for tables, found in database pointed to by `dsn`
+and dumps them to a given `packagePath` directory. Returna an error if
+unsuccesfull. The the name of the last directory in the path is used as
+package name. The directory must exist already.
+
+Three files are created. The first consist of boilerplate code. There is a
+generic structure embedding [Rx] constrained to only the generated from tables
+structures and can be modified by the programmer. The second contains all the
+structures, mapped to tables. The third is a test file, containing tests for
+the generated structures to prove that the generated code works fine. All three
+files should be under version control.
+*/
+func Generate(dsn string, packagePath string) error {
+	DSN = dsn
+	dh, err := safeOpen(packagePath)
+	if err != nil {
+		return err
+	}
+	defer dh.Close()
+	// Now we will know if we are run for the first time or not.
+	files, err := dh.ReadDir(0)
+	if err != nil {
+		return err
+	}
+	// `reGenerate` will have the value 0 if we open the directory for the first time.
+	reGenerate := len(files)
+	_ = reGenerate
+	return err
 }

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"fmt"
+	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -612,6 +613,53 @@ func TestWrap(t *testing.T) {
 	reQ.Equal(`second record`, secondFoo.Description)
 }
 
+func TestMigrate_up(t *testing.T) {
+	rx.ResetDB()
+	rx.ResetDB() // singleDB is already nil, but we want to cover more code.
+	reQ := require.New(t)
+	dsn := rx.DSN // `testdata/migrate_test.sqlite`
+	err := rx.Migrate(`testdata/migr.sql`, dsn, `up`)
+	reQ.ErrorContains(err, `no such file or directory`)
+
+	err = rx.Migrate(`testdata/migrations_01.sql`, dsn, `up`)
+	reQ.NoErrorf(err, `Unexpected error during migration: %v`, err)
+	// now all 'up' migrations, found in migrations_01 must be registered as
+	// applied in rx.MigrationsTable
+	rxM := rx.NewRx[rx.Migrations]()
+	appliedMigrations, err := rxM.Select(`direction=:dir`, rx.SQLMap{`dir`: `up`})
+	reQ.NoErrorf(err, `Unexpected error during Select: %v`, err)
+	reQ.Equal(2, len(appliedMigrations))
+	t.Log(`Repeating rx.Migrate must be idempotent!`)
+	err = rx.Migrate(`testdata/migrations_01.sql`, dsn, `up`)
+	reQ.NoErrorf(err, `Unexpected error during repeated migration: %v`, err)
+	appliedMigrations, err = rxM.Select(`direction=:dir`, rx.SQLMap{`dir`: `up`})
+	reQ.NoErrorf(err, `Unexpected error during Select: %v`, err)
+	reQ.Equal(2, len(appliedMigrations))
+}
+
+func TestGenerate_no_such(t *testing.T) {
+	reQ := require.New(t)
+	packagePath := os.Getenv("EXAMPLE_MODEL")
+	t.Logf("Will generate model in '%s' but will will get error as the path does not exist yet.", packagePath)
+	err := rx.Generate(rx.DSN, packagePath)
+	reQ.ErrorContains(err, `no such file or directory`)
+}
+
+func TestMigrate_down(t *testing.T) {
+	reQ := require.New(t)
+	dsn := rx.DSN // `testdata/migrate_test.sqlite`
+	err := rx.Migrate(`testdata/migrations_01.sql`, dsn, `down`)
+	reQ.NoErrorf(err, `Unexpected error during migration: %v`, err)
+}
+
+func TestMigrate_left(t *testing.T) {
+	reQ := require.New(t)
+	dsn := rx.DSN // `testdata/migrate_test.sqlite`
+	err := rx.Migrate(`testdata/migrations_01.sql`, dsn, `left`)
+	t.Log(err.Error())
+	reQ.ErrorContains(err, `direction can be only`)
+}
+
 func TestPanics(t *testing.T) {
 	tests := []struct {
 		fn   func()
@@ -668,45 +716,6 @@ func expectPanic(t *testing.T, f func()) {
 		}
 	}()
 	f()
-}
-
-func TestMigrate_up(t *testing.T) {
-	rx.ResetDB()
-	rx.ResetDB() // singleDB is now nil, but we want to cover more code.
-	reQ := require.New(t)
-	dsn := rx.DSN // `testdata/migrate_test.sqlite`
-	err := rx.Migrate(`testdata/migr.sql`, dsn, `up`)
-	reQ.ErrorContains(err, `no such file or directory`)
-
-	err = rx.Migrate(`testdata/migrations_01.sql`, dsn, `up`)
-	reQ.NoErrorf(err, `Unexpected error during migration: %v`, err)
-	// now all migrations, found in migrations_01 must be registered as applied
-	// in rx.MigrationsTable
-	rxM := rx.NewRx[rx.Migrations]()
-	appliedMigrations, err := rxM.Select(`direction=:dir`, rx.SQLMap{`dir`: `up`})
-	reQ.NoErrorf(err, `Unexpected error during Select: %v`, err)
-	reQ.Equal(2, len(appliedMigrations))
-	t.Log(`Repeating rx.Migrate must be idempotent!`)
-	err = rx.Migrate(`testdata/migrations_01.sql`, dsn, `up`)
-	reQ.NoErrorf(err, `Unexpected error during repeated migration: %v`, err)
-	appliedMigrations, err = rxM.Select(`direction=:dir`, rx.SQLMap{`dir`: `up`})
-	reQ.NoErrorf(err, `Unexpected error during Select: %v`, err)
-	reQ.Equal(2, len(appliedMigrations))
-}
-
-func TestMigrate_down(t *testing.T) {
-	reQ := require.New(t)
-	dsn := rx.DSN // `testdata/migrate_test.sqlite`
-	err := rx.Migrate(`testdata/migrations_01.sql`, dsn, `down`)
-	reQ.NoErrorf(err, `Unexpected error during migration: %v`, err)
-}
-
-func TestMigrate_left(t *testing.T) {
-	reQ := require.New(t)
-	dsn := rx.DSN // `testdata/migrate_test.sqlite`
-	err := rx.Migrate(`testdata/migrations_01.sql`, dsn, `left`)
-	t.Log(err.Error())
-	reQ.ErrorContains(err, `direction can be only`)
 }
 
 // TestResetDB resets the database it self, while rx.ResetDB resets the
