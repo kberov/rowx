@@ -44,7 +44,7 @@ linters:
         # https://medium.com/@sebassegros/golang-dealing-with-maligned-structs-9b77bacf4b97
         # https://en.wikipedia.org/wiki/Data_structure_alignment
         # https://go.dev/src/go/types/sizes.go
-        # - fieldalignment
+        - fieldalignment
     errcheck:
       # See https://github.com/kisielk/errcheck#excluding-functions
       exclude-functions:

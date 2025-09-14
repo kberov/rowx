@@ -52,6 +52,13 @@ CREATE TABLE foo(
 );
 PRAGMA foreign_keys = ON;
 `
+var drops = `
+PRAGMA foreign_keys = OFF;
+DROP TABLE IF EXISTS users;
+DROP TABLE IF EXISTS user_group;
+DROP TABLE IF EXISTS groups;
+DROP TABLE IF EXISTS foo;
+`
 
 type Users struct {
 	LoginName string
@@ -87,7 +94,7 @@ func multiExec(e sqlx.Execer, query string) {
 }
 
 func init() {
-	rx.Logger.SetLevel(log.INFO)
+	rx.Logger.SetLevel(log.DEBUG)
 	multiExec(rx.DB(), schema)
 }
 
@@ -617,10 +624,13 @@ func TestMigrate_up(t *testing.T) {
 	rx.ResetDB()
 	rx.ResetDB() // singleDB is already nil, but we want to cover more code.
 	reQ := require.New(t)
-	dsn := rx.DSN // `testdata/migrate_test.sqlite`
+	dsn := `testdata/migrate_test.sqlite`
 	err := rx.Migrate(`testdata/migr.sql`, dsn, `up`)
 	reQ.ErrorContains(err, `no such file or directory`)
 
+	rx.ResetDB()
+	multiExec(rx.DB(), drops)
+	dsn = rx.DSN // `testdata/migrate_test.sqlite`
 	err = rx.Migrate(`testdata/migrations_01.sql`, dsn, `up`)
 	reQ.NoErrorf(err, `Unexpected error during migration: %v`, err)
 	// now all 'up' migrations, found in migrations_01 must be registered as
@@ -640,9 +650,19 @@ func TestMigrate_up(t *testing.T) {
 func TestGenerate_no_such(t *testing.T) {
 	reQ := require.New(t)
 	packagePath := os.Getenv("EXAMPLE_MODEL")
-	t.Logf("Will generate model in '%s' but will will get error as the path does not exist yet.", packagePath)
+	t.Logf("Will generate model in '%s', but will get error as the path does not exist yet.", packagePath)
 	err := rx.Generate(rx.DSN, packagePath)
 	reQ.ErrorContains(err, `no such file or directory`)
+}
+
+func TestGenerate_example_model(t *testing.T) {
+	reQ := require.New(t)
+	packagePath := os.Getenv("EXAMPLE_MODEL")
+	t.Logf("Will generate model in '%s' after creating it.", packagePath)
+	err := os.MkdirAll(packagePath, 0750)
+	reQ.NoErrorf(err, `Unexpected error: %+v`, err)
+	err = rx.Generate(rx.DSN, packagePath)
+	reQ.NoErrorf(err, `Unexpected error during rx.Generate: %+v`, err)
 }
 
 func TestMigrate_down(t *testing.T) {
@@ -699,6 +719,12 @@ func TestPanics(t *testing.T) {
 				_ = rx.Migrate(`../../../testdata/migrations_01.sql`, dsn, `down`)
 			},
 		},
+		{
+			name: `Generate_unsafe_path`,
+			fn: func() {
+				_ = rx.Generate(rx.DSN, `../../../example/model`)
+			},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -721,13 +747,6 @@ func expectPanic(t *testing.T, f func()) {
 // TestResetDB resets the database it self, while rx.ResetDB resets the
 // connection only (which should drop the whole :memory: database).
 func TestResetDB(t *testing.T) {
-	drops := `
-PRAGMA foreign_keys = OFF;
-DROP TABLE IF EXISTS users;
-DROP TABLE IF EXISTS user_group;
-DROP TABLE IF EXISTS groups;
-DROP TABLE IF EXISTS foo;
-`
 	multiExec(rx.DB(), drops)
 	multiExec(rx.DB(), schema)
 	t.Log(`Database is reset.`)

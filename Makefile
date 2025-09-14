@@ -1,6 +1,6 @@
 BIN="./bin"
 EXAMPLE=./example
-export EXAMPLE_MODEL=${EXAMPLE}/generated/model
+export EXAMPLE_MODEL=${EXAMPLE}/model
 SRC=$(find . -name "*.go")
 BASE_PACKAGE := github.com/kberov/rowx
 
@@ -20,7 +20,7 @@ fmt:
 
 lint:
 	$(info ******************** running lint tools ********************)
-	golangci-lint run # -v
+	golangci-lint run --config ./.golangci.yaml # -v
 
 test: install_deps
 	$(info ******************** running tests ********************)
@@ -28,14 +28,15 @@ test: install_deps
 	# go tool cover -html=coverage.html
 	# TODO: re-generate example model, build it with a build tag
 	# `go:build example_model` and then run the generated test package.
-	mkdir -p $(EXAMPLE_MODEL)
+
 install_deps:
 	$(info ******************** downloading dependencies ********************)
 	go get -v ./...
 
 clean:
 	rm -rf $(BIN)
-	rm -rf $(EXAMPLE)
+	rm -rf rx/$(EXAMPLE)
+	rm -rf rx/testdata/migrate_test.sqlite
 
 update_deps:
 	go get -u -t -v ./...

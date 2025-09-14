@@ -26,9 +26,9 @@ CREATE TABLE users (
   -- In Perl we use gmtime as object from Time::Piece'
   tstamp INTEGER DEFAULT 0,
   -- 'registration time',,
-  reg_time INTEGER DEFAULT 0,
+  reg_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP, 
   disabled INT(1) DEFAULT 1,
-  start_date INTEGER DEFAULT 0,
+  start_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP, 
   stop_date INTEGER DEFAULT 0
 );
 CREATE INDEX user_start_date ON users(start_date);
@@ -115,7 +115,7 @@ CREATE TABLE domove (
 --  'Domain permissions',
   permissions VARCHAR(10) DEFAULT '-rwxr-xr-x' ,
 --  '0:not published, 1:for review, >=2:published'
-  published INT(1) DEFAULT 0
+  published INT(1) CHECK(published IN(0, 1, 2)) DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS domove_published ON domove(published);
@@ -143,17 +143,17 @@ CREATE TABLE stranici (
   user_id INTEGER,
   -- Group for which the permissions apply (usually primary group of the owner).
   group_id INTEGER,
-  tstamp INTEGER DEFAULT 0,
-  start INTEGER DEFAULT 0,
-  stop INTEGER DEFAULT 0,
+  tstamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP, 
+  start TIMESTAMP DEFAULT CURRENT_TIMESTAMP, 
+  stop TIMESTAMP DEFAULT 0,
   -- 0: not published, 1: for review/preview, >=2: published
-  published int(1) DEFAULT 1,
+  published INT(1) DEFAULT 1,
   -- Is this page hidden? 0=No, 1=Yes
-  hidden int(1) DEFAULT 0,
+  hidden INT(1) DEFAULT 0,
   -- Is this page deleted? 0=No, 1=Yes
-  deleted int(1) DEFAULT 0,
+  deleted INT(1) DEFAULT 0,
   -- Who modified this page the last time?
-  changed_by INTEFER REFERENCES users(id),
+  changed_by INTEGER REFERENCES users(id),
   FOREIGN KEY (pid)       REFERENCES stranici(id) ON UPDATE CASCADE ON DELETE CASCADE,
   FOREIGN KEY (dom_id)    REFERENCES domove(id)   ON UPDATE CASCADE ON DELETE CASCADE,
   FOREIGN KEY (user_id)   REFERENCES users(id)    ON UPDATE CASCADE,
@@ -200,9 +200,11 @@ VALUES (
   sorting int(10) DEFAULT 0,
   -- Semantic content types: 'question', 'answer', 'writing', 'note',
   -- 'book', 'глава', 'title', 'paragraph'…
-  data_type VARCHAR(32) DEFAULT 'note',
+  data_type VARCHAR(32) CHECK(data_type IN(
+        'question', 'answer', 'writing', 'note', 'book', 'глава', 'title',
+        'paragraph')) DEFAULT 'note',
   -- text, html, markdown, asc…
-  data_format VARCHAR(32) DEFAULT 'text',
+  data_format VARCHAR(32) CHECK(data_format IN('text', 'html', 'markdown')) DEFAULT 'text',
   -- When this content was inserted
   created_at INTEGER NOT NULL DEFAULT 0,
   -- Last time the record was touched
@@ -218,26 +220,27 @@ VALUES (
   -- Main celini when applicable.
   body TEXT DEFAULT '',
   -- celini box in which this element should be displayed (e.g. main|главна, left|лѣва, right|дѣсна, header|глава, footer|дъно, foo, bar).
-  box VARCHAR(35) DEFAULT 'main',
+  box VARCHAR(35) CHECK(box IN('main', 'главна', 'left', 'лѣва', 'right', 'дѣсна',
+        ' header', 'глава', 'footer', 'дъно')) DEFAULT 'main',
   -- Language of this content. Means any language, when empty string
   language VARCHAR(5) DEFAULT '',
   -- tuuugggooo - Experimental permissions for the content. Who can see/edit/delete it.
   -- TODO: document and design the behavior for pages which are "d" (directories) and "l" (links)
   permissions char(10) DEFAULT '-rwxr-xr-x',
   -- Show on top independently of other sorting.
-  featured int(1) DEFAULT 0,
+  featured int(1) CHECK(featured IN(0, 1)) DEFAULT 0,
   -- Answer accepted?
-  accepted int(1) DEFAULT 0,
+  accepted int(1) CHECK(accepted IN(0, 1)) DEFAULT 0,
   -- Reported as inapropriate offensive etc. Higher values mean "very bad".
   bad int(2) DEFAULT 0,
   -- When set to 1 the record is not visible anywhere.
-  deleted int(1) DEFAULT 0,
+  deleted int(1) CHECK(deleted IN(0, 1)) DEFAULT 0,
   -- Date/Time from which the record will be accessible in the site.
-  start INTEGER DEFAULT 0,
+  start TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   -- Date/Time till which the record will be accessible in the site.
-  stop INTEGER DEFAULT 0,
+  stop TIMESTAMP DEFAULT 0,
   -- Who modified this record the last time?
-  changed_by INTEFER REFERENCES users(id),
+  changed_by INTEGER REFERENCES users(id),
   FOREIGN KEY (pid)      REFERENCES celini(id)   ON UPDATE CASCADE ON DELETE CASCADE,
   FOREIGN KEY (page_id)  REFERENCES stranici(id) ON UPDATE CASCADE ON DELETE CASCADE,
   FOREIGN KEY (user_id)  REFERENCES users(id)    ON UPDATE CASCADE,

@@ -322,9 +322,10 @@ is inserted in its own statement. This may change in a future release. If there
 are no records to be inserted, [Rx.Insert] panics.
 
 If you need to insert a [Rowx] structure with a specific value for ID, add a
-tag to the ID column `rx:id,no_auto` or use directly [sqlx].
+tag to the ID column `rx:"id,no_auto"` or use directly [sqlx].
 
-If you want to skip any field during insert add, a tag to it `rx:field_name,auto`.
+If you want to skip any field during insert (including `id`) add, a tag to it
+`rx:"field_name,auto"`.
 */
 func (m *Rx[R]) Insert() (sql.Result, error) {
 	dataLen := len(m.Data())

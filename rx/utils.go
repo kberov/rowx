@@ -79,7 +79,7 @@ SnakeToCamel converts words from snake_case to CamelCase. It will be used to
 convert table_name to TableName and column_names to ColumnNames. This will be
 done during generation of structures out from tables.
 */
-func SnakeToCamel(snake_case_word string) string { //nolint:all //  should be snakeCaseWord
+func SnakeToCamel(snake_case_word string) string { //nolint:revive
 	runes := []rune(snake_case_word)
 	if len(runes) == 2 {
 		return strings.ToUpper(snake_case_word)
@@ -316,5 +316,189 @@ func Generate(dsn string, packagePath string) error {
 	// `reGenerate` will have the value 0 if we open the directory for the first time.
 	reGenerate := len(files)
 	_ = reGenerate
+	sql := QueryTemplates[`SELECT_TABLE_INFO_sqlite3`].(string)
+	info := []columnInfo{}
+	if err = sqlx.Select(DB(), &info, sql); err != nil {
+		return fmt.Errorf(`sqlx.Select %s`, err.Error())
+	}
+	var fileString strings.Builder
+	prepareFileHeader(packagePath, info, &fileString)
+	prepareStructs(info, &fileString)
+	Logger.Debugf(`Package header and body: %+s`, fileString.String())
 	return err
+}
+
+var fileHeader = `
+// Package ${package} contains structs mapped to tables, produced from database
+// ${database}. They all implement the [rx.SqlxMeta] interface and can be used
+// like in the following example for CRUD operations.
+package ${package}
+
+import (
+	"database/sql"
+
+	"github.com/kberov/rowx/rx"
+)
+
+type Rowx interface{
+	${constraint}
+}
+
+`
+
+// prepareFileHeader only iterates trough the rows to prepare the Rowx
+// constraint. It allso uses tha last folder from packagePath for package name.
+// The produced string is added to fileString.
+func prepareFileHeader(packagePath string, columns []columnInfo, fileString *strings.Builder) {
+	constraint := []string{}
+	for i := 1; i < len(columns); i++ {
+		if columns[i].TableName != columns[i-1].TableName {
+			constraint = append(constraint, SnakeToCamel(columns[i].TableName))
+		}
+	}
+	pathToPackage := strings.Split(packagePath, string(os.PathSeparator))
+	fileString.WriteString(
+		replace(fileHeader, `${`, `}`, SQLMap{
+			`package`:    pathToPackage[len(pathToPackage)-1],
+			`constraint`: strings.Join(constraint, ` | `),
+			`database`:   DSN,
+		}),
+	)
+}
+
+var structTemplate = `
+
+// ${TableName} is an object, mapped to ${table_name}. 
+type ${TableName} struct {
+${fields}
+}
+
+// Table returns ${table_name}.
+func (u *${TableName}) Table() string {
+	return "${table_name}" 
+}
+
+// Columns returns a slice with column_names.
+func (u *${TableName}) Columns() string {
+	return []string{${column_names}
+	}
+}
+`
+
+func appendRowToLastStructTemplate(structsStashes *[]map[string]any, i int, columns []columnInfo) {
+	c := 0
+	columnName := "\n\t\t\"" + columns[i].CName + "\","
+	if i == 0 {
+		// SA4006: this value of structsStashes is never used (staticcheck)
+		//nolint:staticcheck
+		*structsStashes = append(*structsStashes, map[string]any{
+			`TableName`:    SnakeToCamel(columns[i].TableName),
+			`table_name`:   columns[i].TableName,
+			`fields`:       sql2GoTypeAndTag(columns[i]),
+			`column_names`: columnName,
+		})
+		return
+	}
+
+	l := len(*structsStashes)
+	c = l - 1
+
+	if (*structsStashes)[c][`table_name`] != columns[i].TableName {
+		// SA4006: this value of structsStashes is never used (staticcheck)
+		//nolint:staticcheck
+		*structsStashes = append(*structsStashes, map[string]any{
+			`TableName`:    SnakeToCamel(columns[i].TableName),
+			`table_name`:   columns[i].TableName,
+			`fields`:       sql2GoTypeAndTag(columns[i]),
+			`column_names`: columnName,
+		})
+		return
+	}
+	(*structsStashes)[c][`fields`] = (*structsStashes)[c][`fields`].(string) + sql2GoTypeAndTag(columns[i])
+	(*structsStashes)[c][`column_names`] = (*structsStashes)[c][`column_names`].(string) + columnName
+}
+
+// sql2GoTypeAndTag converts SQL column types to Go types. Parts of the code
+// were shamelessly stollen from https://github.com/go-jet/jet
+// generator/template/model_template.go: toGoType(column metadata.Column).
+func sql2GoTypeAndTag(column columnInfo) string {
+	// Logger.Debugf(`column.CType:%s;column.NotNull:%v`, column.CType, column.NotNull)
+	var colType = strings.ToLower(strings.TrimSpace(strings.Split(column.CType, "(")[0]))
+	var goType string
+
+	switch colType {
+	case "user-defined", "enum":
+		goType = "string"
+	case "boolean", "bool":
+		goType = "bool"
+	case "tinyint":
+		goType = "int8"
+	case "smallint", "int2", "year":
+		goType = "int16"
+	case "integer", "int4",
+		"mediumint", "int": // MySQL
+		goType = "int32"
+	case "bigint", "int8":
+		goType = "int64"
+	case "date",
+		"timestamp without time zone", "timestamp",
+		"timestamp with time zone", "timestamptz",
+		"time without time zone", "time",
+		"time with time zone", "timetz",
+		"datetime": // MySQL
+		goType = "time.Time"
+	case "bytea",
+		"binary", "varbinary", "tinyblob", "blob", "mediumblob", "longblob": // MySQL
+		goType = "[]byte"
+	case "text",
+		"character", "bpchar",
+		"character varying", "varchar", "nvarchar",
+		"tsvector", "bit", "bit varying", "varbit",
+		"money", "json", "jsonb",
+		"xml", "point", "interval", "line", "array",
+		"char", "tinytext", "mediumtext", "longtext": // MySQL
+		goType = "string"
+	case "real", "float4":
+		goType = "float32"
+	case "numeric", "decimal",
+		"double precision", "float8", "float",
+		"double": // MySQL
+		goType = "float64"
+	default:
+		Logger.Infof("Unsupported sql column type '%s' for column '%s', using string instead.", column.CType, column.CName)
+		goType = "string"
+	}
+	Logger.Debugf("goType:%s", goType)
+	var neededTag string
+	columnName := strings.ToLower(column.CName)
+	if columnName == `id` {
+		neededTag = "`" + ReflectXTag + `:"` + columnName + `,auto"` + "`"
+	}
+	field := "\t" + SnakeToCamel(columnName) + ` ` + goType + " " + neededTag + "\n"
+	// TODO: if !column.NotNull, if .column.PK>0 etc...
+	return field
+}
+
+func prepareStructs(columns []columnInfo, fileString *strings.Builder) {
+	structsInfo := make([]map[string]any, 0, 10)
+
+	for i := range columns {
+		appendRowToLastStructTemplate(&structsInfo, i, columns)
+	}
+	// Logger.Debugf(`structsInfo: %+v`, structsInfo)
+	for _, v := range structsInfo {
+		fileString.WriteString(replace(structTemplate, `${`, `}`, v))
+	}
+}
+
+type columnInfo struct {
+	TableName string
+	CID       uint8
+	CName     string
+	// CType sql.ColumnType
+	CType        string
+	NotNull      bool
+	DefaultValue sql.NullString
+	PK           uint8
+	SQL          string `rx:"sql"`
 }

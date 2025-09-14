@@ -33,6 +33,14 @@ CREATE TABLE IF NOT EXISTS ${table} (
 	applied TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 	UNIQUE(version, direction)
 )`,
+		`SELECT_TABLE_INFO_sqlite3`: `
+SELECT t.name AS table_name, c.cid as c_id, c.name AS c_name,
+c.type as c_type, c."notnull" as not_null, c.dflt_value as default_value, c.pk as pk
+-- TODO: Parse CHECK constraints(and later maybe foreign keys) from t.sql
+-- , t.sql
+FROM sqlite_master t, pragma_table_info(t.name) c
+WHERE t.type='table' AND t.name NOT LIKE 'sqlite%' ORDER BY table_name, c_id;
+`,
 	}
 	replace = fasttemplate.ExecuteStringStd
 )
@@ -40,7 +48,8 @@ CREATE TABLE IF NOT EXISTS ${table} (
 /*
 RenderSQLTemplate gets the template from [QueryTemplates], replaces potential
 partial SQL keys from [QueryTemplates] and then the keys from the given stash
-with values. Returns the produced SQL. Panics if key not found or not of the expected type (string).
+with values. Returns the produced SQL. Panics if key was not found or is not of
+the expected type (string).
 */
 func RenderSQLTemplate(key string, stash map[string]any) string {
 	return replace(replace(QueryTemplates[key].(string), "${", "}", QueryTemplates), "${", "}", stash)
