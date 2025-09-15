@@ -318,8 +318,8 @@ func Generate(dsn string, packagePath string) error {
 	_ = reGenerate
 	sql := QueryTemplates[`SELECT_TABLE_INFO_sqlite3`].(string)
 	info := []columnInfo{}
-	if err = sqlx.Select(DB(), &info, sql); err != nil {
-		return fmt.Errorf(`sqlx.Select %s`, err.Error())
+	if err = DB().Select(&info, sql, MigrationsTable); err != nil {
+		return fmt.Errorf(`DB().Select %s`, err.Error())
 	}
 	var fileString strings.Builder
 	prepareFileHeader(packagePath, info, &fileString)
@@ -328,7 +328,7 @@ func Generate(dsn string, packagePath string) error {
 	return err
 }
 
-var fileHeader = `
+var packageHeader = `
 // Package ${package} contains structs mapped to tables, produced from database
 // ${database}. They all implement the [rx.SqlxMeta] interface and can be used
 // like in the following example for CRUD operations.
@@ -336,8 +336,6 @@ package ${package}
 
 import (
 	"database/sql"
-
-	"github.com/kberov/rowx/rx"
 )
 
 type Rowx interface{
@@ -358,7 +356,7 @@ func prepareFileHeader(packagePath string, columns []columnInfo, fileString *str
 	}
 	pathToPackage := strings.Split(packagePath, string(os.PathSeparator))
 	fileString.WriteString(
-		replace(fileHeader, `${`, `}`, SQLMap{
+		replace(packageHeader, `${`, `}`, SQLMap{
 			`package`:    pathToPackage[len(pathToPackage)-1],
 			`constraint`: strings.Join(constraint, ` | `),
 			`database`:   DSN,
@@ -428,28 +426,28 @@ func sql2GoTypeAndTag(column columnInfo) string {
 
 	switch colType {
 	case "user-defined", "enum":
-		goType = "string"
+		goType = sql2IfNullableGoType(column, "string")
 	case "boolean", "bool":
-		goType = "bool"
+		goType = sql2IfNullableGoType(column, "bool")
 	case "tinyint":
-		goType = "int8"
+		goType = sql2IfNullableGoType(column, "int8")
 	case "smallint", "int2", "year":
-		goType = "int16"
+		goType = sql2IfNullableGoType(column, "int16")
 	case "integer", "int4",
 		"mediumint", "int": // MySQL
-		goType = "int32"
+		goType = sql2IfNullableGoType(column, "int32")
 	case "bigint", "int8":
-		goType = "int64"
+		goType = sql2IfNullableGoType(column, "int64")
 	case "date",
 		"timestamp without time zone", "timestamp",
 		"timestamp with time zone", "timestamptz",
 		"time without time zone", "time",
 		"time with time zone", "timetz",
 		"datetime": // MySQL
-		goType = "time.Time"
+		goType = sql2IfNullableGoType(column, "time.Time")
 	case "bytea",
 		"binary", "varbinary", "tinyblob", "blob", "mediumblob", "longblob": // MySQL
-		goType = "[]byte"
+		goType = sql2IfNullableGoType(column, "[]byte")
 	case "text",
 		"character", "bpchar",
 		"character varying", "varchar", "nvarchar",
@@ -457,16 +455,16 @@ func sql2GoTypeAndTag(column columnInfo) string {
 		"money", "json", "jsonb",
 		"xml", "point", "interval", "line", "array",
 		"char", "tinytext", "mediumtext", "longtext": // MySQL
-		goType = "string"
+		goType = sql2IfNullableGoType(column, "string")
 	case "real", "float4":
-		goType = "float32"
+		goType = sql2IfNullableGoType(column, "float32")
 	case "numeric", "decimal",
 		"double precision", "float8", "float",
 		"double": // MySQL
-		goType = "float64"
+		goType = sql2IfNullableGoType(column, "float64")
 	default:
 		Logger.Infof("Unsupported sql column type '%s' for column '%s', using string instead.", column.CType, column.CName)
-		goType = "string"
+		goType = sql2IfNullableGoType(column, "string")
 	}
 	Logger.Debugf("goType:%s", goType)
 	var neededTag string
@@ -477,6 +475,22 @@ func sql2GoTypeAndTag(column columnInfo) string {
 	field := "\t" + SnakeToCamel(columnName) + ` ` + goType + " " + neededTag + "\n"
 	// TODO: if !column.NotNull, if .column.PK>0 etc...
 	return field
+}
+
+/*
+sql2IfNullableGoType decides what will be the final type for the field in the
+Go struct. We may add here some heuristics applied on the data and found check
+constraints to add new types which implement the Valuer and Scanner interfaces.
+*/
+func sql2IfNullableGoType(column columnInfo, defaultType string) string {
+	Logger.Debugf(`DefaultValue: %+v`, column.DefaultValue)
+	if column.PK > 0 {
+		return defaultType
+	}
+	if column.NotNull {
+		return defaultType
+	}
+	return "sql.Null[" + defaultType + "]"
 }
 
 func prepareStructs(columns []columnInfo, fileString *strings.Builder) {

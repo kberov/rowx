@@ -117,7 +117,7 @@ type whereParams struct{ GroupID int32 }
 type U struct {
 	table     string
 	LoginName string
-	ID        int32 `rx:"id,auto"`
+	ID        int32 // `rx:"id,auto"`
 }
 
 func (u *U) Table() string {
@@ -745,8 +745,9 @@ func expectPanic(t *testing.T, f func()) {
 }
 
 // TestResetDB resets the database it self, while rx.ResetDB resets the
-// connection only (which should drop the whole :memory: database).
+// connection only.
 func TestResetDB(t *testing.T) {
+	rx.ResetDB()
 	multiExec(rx.DB(), drops)
 	multiExec(rx.DB(), schema)
 	t.Log(`Database is reset.`)
@@ -882,11 +883,11 @@ func ExampleRx_Insert() {
 	if e != nil {
 		println(`Error inserting new users:`, e)
 	}
-	// udata, e := rx.NewRx[Users]().Select(`id>=0`, nil)
-	// fmt.Printf("Selected []Users %+v; %+v\n", udata, e)
+	// users, e := rx.NewRx[Users]().Select(`id>=0`, nil)
+	// fmt.Printf("Selected []Users %+v; %+v\n", users, e)
 	groupRs, e := rx.NewRx[Groups](Groups{Name: `fifth`}).Insert()
 	if e != nil {
-		println(`Error inserting new group:`, e)
+		println(`Error inserting new group:`, e.Error())
 	}
 	lastGroupID, _ := groupRs.LastInsertId()
 	fmt.Printf("Inserted new group with id: %d\n", lastGroupID)

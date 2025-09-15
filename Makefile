@@ -22,7 +22,7 @@ lint:
 	$(info ******************** running lint tools ********************)
 	golangci-lint run --config ./.golangci.yaml # -v
 
-test: install_deps
+test: install_deps clean
 	$(info ******************** running tests ********************)
 	go test -failfast -v  ./... -coverprofile=coverage.html	
 	# go tool cover -html=coverage.html
