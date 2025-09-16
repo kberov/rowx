@@ -25,9 +25,9 @@ lint:
 test: install_deps clean
 	$(info ******************** running tests ********************)
 	go test -failfast -v  ./... -coverprofile=coverage.html	
-	# go tool cover -html=coverage.html
-	# TODO: re-generate example model, build it with a build tag
-	# `go:build example_model` and then run the generated test package.
+	# test id the produced EXAMPLE_MODEL compiles too
+	go build ./...
+	go tool cover -html=coverage.html
 
 install_deps:
 	$(info ******************** downloading dependencies ********************)

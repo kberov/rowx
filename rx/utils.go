@@ -84,23 +84,16 @@ func SnakeToCamel(snake_case_word string) string { //nolint:revive
 	if len(runes) == 2 {
 		return strings.ToUpper(snake_case_word)
 	}
-	var words strings.Builder
-	nextUp := false
-
-	words.WriteRune(unicode.ToUpper(runes[0]))
-	for _, v := range runes[1:] {
-		if v == '_' {
-			nextUp = true
+	splitWords := strings.Split(snake_case_word, `_`)
+	for i, word := range splitWords {
+		runes := []rune(word)
+		if word == `id` {
+			splitWords[i] = strings.ToUpper(word)
 			continue
 		}
-		if nextUp {
-			words.WriteRune(unicode.ToUpper(v))
-			nextUp = false
-			continue
-		}
-		words.WriteRune(v)
+		splitWords[i] = strings.ToUpper(string(runes[0])) + strings.ToLower(string(runes[1:]))
 	}
-	return words.String()
+	return strings.Join(splitWords, ``)
 }
 
 type dir uint8
@@ -274,7 +267,7 @@ func safeOpen(filePath string) (*os.File, error) {
 	if !strings.HasPrefix(filePath, cwd) {
 		Logger.Panicf(`%s is unsafe. Cannot continue...`, filePath)
 	}
-	Logger.Debugf(`Opening migrations file %s`, filePath)
+	// Logger.Debugf(`Opening a safe path %s`, filePath)
 	return os.Open(filePath)
 }
 
@@ -289,17 +282,16 @@ func parseMigrationHeader(line string) (version, direction string) {
 }
 
 /*
-Generate generates structures for tables, found in database pointed to by `dsn`
-and dumps them to a given `packagePath` directory. Returna an error if
-unsuccesfull. The the name of the last directory in the path is used as
+Generate generates structures for tables, found in database, pointed to by `dsn`
+and dumps them to a given `packagePath` directory. Returns an error if
+unsuccesfull. The name of the last directory in the path is used as
 package name. The directory must exist already.
 
-Three files are created. The first consist of boilerplate code. There is a
-generic structure embedding [Rx] constrained to only the generated from tables
-structures and can be modified by the programmer. The second contains all the
-structures, mapped to tables. The third is a test file, containing tests for
-the generated structures to prove that the generated code works fine. All three
-files should be under version control.
+Two files are created. The first only declares the package and can be modified
+by the programmer. It will not be regenerated on subsequent runs. The second
+contains all the structures, mapped to tables. It will be regenerated again on
+the next run of this function to map the potentially migrated to a new state
+schema.
 */
 func Generate(dsn string, packagePath string) error {
 	DSN = dsn
@@ -308,76 +300,110 @@ func Generate(dsn string, packagePath string) error {
 		return err
 	}
 	defer dh.Close()
-	// Now we will know if we are run for the first time or not.
-	files, err := dh.ReadDir(0)
-	if err != nil {
-		return err
-	}
-	// `reGenerate` will have the value 0 if we open the directory for the first time.
-	reGenerate := len(files)
-	_ = reGenerate
 	sql := QueryTemplates[`SELECT_TABLE_INFO_sqlite3`].(string)
 	info := []columnInfo{}
 	if err = DB().Select(&info, sql, MigrationsTable); err != nil {
-		return fmt.Errorf(`DB().Select %s`, err.Error())
+		return fmt.Errorf(`DB().Select: %w`, err)
 	}
-	var fileString strings.Builder
-	prepareFileHeader(packagePath, info, &fileString)
-	prepareStructs(info, &fileString)
-	Logger.Debugf(`Package header and body: %+s`, fileString.String())
+	var structsFileString strings.Builder
+	dirName := dh.Name()
+	preparePackageHeaderForGeneratedStructs(dirName, &structsFileString)
+	prepareGeneratedStructs(info, &structsFileString)
+	// Logger.Debugf(`Package header and body: %+s`, structsFileString.String())
+	// Write the prepared code with generated structures to file.
+	sep := string(os.PathSeparator)
+	path := strings.Split(dirName, sep)
+	packageName := path[len(path)-1]
+	structsFileName := dirName + sep + packageName + "_structs.go"
+	if err = os.WriteFile(structsFileName, []byte(structsFileString.String()), 0600); err != nil {
+		return fmt.Errorf("os.WriteFile: %w", err)
+	}
+	// Now we will know if we are ran for the first time for this directory or not.
+	files, _ := dh.ReadDir(0)
+	regenerated := false
+	packageFileName := packageName + ".go"
+	for _, f := range files {
+		if f.Name() == packageFileName {
+			regenerated = true
+		}
+	}
+	if !regenerated {
+		modelAsString := prepareModelFileContents(packageName)
+		modelFileName := dirName + sep + packageFileName
+		return os.WriteFile(modelFileName, []byte(modelAsString), 0600)
+	}
 	return err
 }
 
-var packageHeader = `
-// Package ${package} contains structs mapped to tables, produced from database
-// ${database}. They all implement the [rx.SqlxMeta] interface and can be used
-// like in the following example for CRUD operations.
+var modelHeader = `// Package ${package} contains structs mapped to tables, produced from
+// database ${database}.
+// They all implement the [rx.SqlxMeta] interface and can be used
+// for CRUD operations.
 package ${package}
+
+/*
+This file will not be regenerated the next time you run [rx.Generate]. You can
+add your custom code here.
+*/
+`
+
+func prepareModelFileContents(packageName string) string {
+	return replace(modelHeader, `${`, `}`, map[string]any{
+		`package`:  packageName,
+		`Package`:  SnakeToCamel(packageName),
+		`database`: DSN,
+	})
+}
+
+var packageHeader = `package ${package}
+/*
+This file will be regenerated each time you run [rx.Generate]
+*/
 
 import (
 	"database/sql"
+	"time"
+	
+	"github.com/kberov/rowx/rx"
 )
-
-type Rowx interface{
-	${constraint}
-}
 
 `
 
-// prepareFileHeader only iterates trough the rows to prepare the Rowx
-// constraint. It allso uses tha last folder from packagePath for package name.
+// preparePackageHeaderForGeneratedStructs only iterates trough the rows to prepare the Rowx
+// constraint. It allso uses the last folder from packagePath for package name.
 // The produced string is added to fileString.
-func prepareFileHeader(packagePath string, columns []columnInfo, fileString *strings.Builder) {
-	constraint := []string{}
-	for i := 1; i < len(columns); i++ {
-		if columns[i].TableName != columns[i-1].TableName {
-			constraint = append(constraint, SnakeToCamel(columns[i].TableName))
-		}
-	}
+func preparePackageHeaderForGeneratedStructs(packagePath string, fileString *strings.Builder) {
 	pathToPackage := strings.Split(packagePath, string(os.PathSeparator))
+	packageName := pathToPackage[len(pathToPackage)-1]
 	fileString.WriteString(
 		replace(packageHeader, `${`, `}`, SQLMap{
-			`package`:    pathToPackage[len(pathToPackage)-1],
-			`constraint`: strings.Join(constraint, ` | `),
-			`database`:   DSN,
+			`package`:  packageName,
+			`Package`:  SnakeToCamel(packageName),
+			`database`: DSN,
 		}),
 	)
 }
 
 var structTemplate = `
 
-// ${TableName} is an object, mapped to ${table_name}. 
+// New${TableName} is a constructor for [${TableName}].
+var New${TableName} = rx.NewRx[${TableName}]
+
+var _ rx.SqlxModel[${TableName}] = New${TableName}()
+
+// ${TableName} is an object, mapped to ${table_name}. It implements the
+// SqlxMeta interface. 
 type ${TableName} struct {
 ${fields}
 }
 
-// Table returns ${table_name}.
+// Table returns ${table_name} for ${TableName}.
 func (u *${TableName}) Table() string {
 	return "${table_name}" 
 }
 
-// Columns returns a slice with column_names.
-func (u *${TableName}) Columns() string {
+// Columns returns a slice with column_names for ${TableName}.
+func (u *${TableName}) Columns() []string {
 	return []string{${column_names}
 	}
 }
@@ -466,24 +492,24 @@ func sql2GoTypeAndTag(column columnInfo) string {
 		Logger.Infof("Unsupported sql column type '%s' for column '%s', using string instead.", column.CType, column.CName)
 		goType = sql2IfNullableGoType(column, "string")
 	}
-	Logger.Debugf("goType:%s", goType)
+	// Logger.Debugf("goType:%s", goType)
 	var neededTag string
 	columnName := strings.ToLower(column.CName)
 	if columnName == `id` {
 		neededTag = "`" + ReflectXTag + `:"` + columnName + `,auto"` + "`"
 	}
 	field := "\t" + SnakeToCamel(columnName) + ` ` + goType + " " + neededTag + "\n"
-	// TODO: if !column.NotNull, if .column.PK>0 etc...
+
 	return field
 }
 
 /*
 sql2IfNullableGoType decides what will be the final type for the field in the
 Go struct. We may add here some heuristics applied on the data and found check
-constraints to add new types which implement the Valuer and Scanner interfaces.
+constraints to set our own types which implement the Valuer and Scanner
+interfaces.
 */
 func sql2IfNullableGoType(column columnInfo, defaultType string) string {
-	Logger.Debugf(`DefaultValue: %+v`, column.DefaultValue)
 	if column.PK > 0 {
 		return defaultType
 	}
@@ -493,7 +519,7 @@ func sql2IfNullableGoType(column columnInfo, defaultType string) string {
 	return "sql.Null[" + defaultType + "]"
 }
 
-func prepareStructs(columns []columnInfo, fileString *strings.Builder) {
+func prepareGeneratedStructs(columns []columnInfo, fileString *strings.Builder) {
 	structsInfo := make([]map[string]any, 0, 10)
 
 	for i := range columns {

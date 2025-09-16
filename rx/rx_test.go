@@ -63,14 +63,14 @@ DROP TABLE IF EXISTS foo;
 type Users struct {
 	LoginName string
 	GroupID   sql.NullInt32
-	ChangedBy sql.NullInt32
+	ChangedBY sql.NullInt32
 	ID        int32 `rx:"id,auto"`
 }
 
 var users = []Users{
-	Users{LoginName: "first", ChangedBy: sql.NullInt32{0, false}},
-	Users{LoginName: "the_second", ChangedBy: sql.NullInt32{1, true}},
-	Users{LoginName: "the_third", ChangedBy: sql.NullInt32{1, true}},
+	Users{LoginName: "first", ChangedBY: sql.NullInt32{0, false}},
+	Users{LoginName: "the_second", ChangedBY: sql.NullInt32{1, true}},
+	Users{LoginName: "the_third", ChangedBY: sql.NullInt32{1, true}},
 }
 
 type Groups struct {
@@ -663,6 +663,36 @@ func TestGenerate_example_model(t *testing.T) {
 	reQ.NoErrorf(err, `Unexpected error: %+v`, err)
 	err = rx.Generate(rx.DSN, packagePath)
 	reQ.NoErrorf(err, `Unexpected error during rx.Generate: %+v`, err)
+
+	// now produce error while opening file for writing
+	err = os.Chmod(packagePath+`/model_structs.go`, 0400)
+	if err != nil {
+		t.Errorf("os.Chmod: %s", err.Error())
+	}
+	err = rx.Generate(rx.DSN, packagePath)
+	t.Logf("%v", err)
+	reQ.ErrorContains(err, `model_structs.go`)
+	reQ.ErrorContains(err, `permission denied`)
+
+	// now produce `regenerated == true` to cover this case
+	_ = os.Chmod(packagePath+`/model_structs.go`, 0600)
+	err = rx.Generate(rx.DSN, packagePath)
+	reQ.NoErrorf(err, `Unexpected error during rx.Generate: %+v`, err)
+
+	// now produce err from DB().Select
+	selectTBI := rx.QueryTemplates[`SELECT_TABLE_INFO_sqlite3`]
+	rx.QueryTemplates[`SELECT_TABLE_INFO_sqlite3`] = `select * from blabla`
+	err = rx.Generate(rx.DSN, packagePath)
+	t.Logf("%v", err)
+	reQ.ErrorContains(err, `DB().Select`)
+	rx.QueryTemplates[`SELECT_TABLE_INFO_sqlite3`] = selectTBI
+
+	// now produce error for reading directory - should never happen!
+	_ = os.Chmod(packagePath, 0300) //nolint:gosec // G302
+	err = rx.Generate(rx.DSN, packagePath)
+	t.Logf("%v", err)
+	reQ.ErrorContains(err, `rx/example/model: permission denied`)
+	_ = os.Chmod(packagePath, 0750) //nolint:gosec // G302
 }
 
 func TestMigrate_down(t *testing.T) {
