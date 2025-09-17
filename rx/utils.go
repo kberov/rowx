@@ -30,7 +30,7 @@ returns it. Panics if the structure is annonimous.
 */
 func TypeToSnake[R Rowx](row R) string {
 	typestr := type2str(row)
-	Logger.Debugf("TypeToSnakeCase typestr: %s", typestr)
+	// Logger.Debugf("TypeToSnakeCase typestr: %s", typestr)
 	// Anonimous struct
 	if typestr == `` {
 		Logger.Panicf(type2StrPanicFmtStr, typestr)
@@ -87,13 +87,29 @@ func SnakeToCamel(snake_case_word string) string { //nolint:revive
 	splitWords := strings.Split(snake_case_word, `_`)
 	for i, word := range splitWords {
 		runes := []rune(word)
-		if word == `id` {
-			splitWords[i] = strings.ToUpper(word)
+		if WORD, ok := isCommonInitialism(word); ok {
+			splitWords[i] = WORD
 			continue
 		}
 		splitWords[i] = strings.ToUpper(string(runes[0])) + strings.ToLower(string(runes[1:]))
 	}
 	return strings.Join(splitWords, ``)
+}
+
+// isCommonInitialism checks and returns the uppercased or properly modified word and `true`. if a word is not an initialism it returns it unchanged and returns `false`.
+func isCommonInitialism(word string) (string, bool) {
+	switch word {
+	case `acl`, `api`, `ascii`, `cpu`, `css`, `dns`, `eof`, `eta`, `gpu`,
+		`guid`, `html`, `http`, `https`, `id`, `ip`, `json`, `lhs`, `os`, `qps`,
+		`ram`, `rhs`, `rpc`, `sla`, `smtp`, `sql`, `ssh`, `tcp`, `tls`, `ttl`,
+		`udp`, `ui`, `uid`, `uuid`, `uri`, `url`, `utf8`, `vm`, `xml`, `xmpp`,
+		`xsrf`, `xss`, `pid`:
+		return strings.ToUpper(word), true
+	case `OAuth`:
+		return word, true
+	default:
+		return word, false
+	}
 }
 
 type dir uint8
@@ -148,7 +164,7 @@ func Migrate(filePath, dsn, direction string) error {
 			continue
 		}
 		Logger.Debugf(`Applying %d . %s|%s %s ...`,
-			i+1, v.Version, v.Direction, v.Statements.String()[:40])
+			i+1, v.Version, v.Direction, v.Statements.String()[:22])
 
 		if err = multiExec(DB(), v.Statements.String()); err != nil {
 			return err
@@ -282,16 +298,16 @@ func parseMigrationHeader(line string) (version, direction string) {
 }
 
 /*
-Generate generates structures for tables, found in database, pointed to by `dsn`
-and dumps them to a given `packagePath` directory. Returns an error if
-unsuccesfull. The name of the last directory in the path is used as
-package name. The directory must exist already.
+Generate generates structures for tables, found in database, pointed to by
+`dsn` and dumps them to a given `packagePath` directory. Returns an error if
+unsuccesfull at any point of the execution. The name of the last directory in
+the path is used as package name. The directory must exist already.
 
 Two files are created. The first only declares the package and can be modified
 by the programmer. It will not be regenerated on subsequent runs. The second
 contains all the structures, mapped to tables. It will be regenerated again on
 the next run of this function to map the potentially migrated to a new state
-schema.
+schema to Go structs.
 */
 func Generate(dsn string, packagePath string) error {
 	DSN = dsn
@@ -303,7 +319,7 @@ func Generate(dsn string, packagePath string) error {
 	sql := QueryTemplates[`SELECT_TABLE_INFO_sqlite3`].(string)
 	info := []columnInfo{}
 	if err = DB().Select(&info, sql, MigrationsTable); err != nil {
-		return fmt.Errorf(`DB().Select: %w`, err)
+		return err
 	}
 	var structsFileString strings.Builder
 	dirName := dh.Name()

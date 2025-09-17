@@ -633,18 +633,20 @@ func TestMigrate_up(t *testing.T) {
 	dsn = rx.DSN // `testdata/migrate_test.sqlite`
 	err = rx.Migrate(`testdata/migrations_01.sql`, dsn, `up`)
 	reQ.NoErrorf(err, `Unexpected error during migration: %v`, err)
+
 	// now all 'up' migrations, found in migrations_01 must be registered as
 	// applied in rx.MigrationsTable
 	rxM := rx.NewRx[rx.Migrations]()
 	appliedMigrations, err := rxM.Select(`direction=:dir`, rx.SQLMap{`dir`: `up`})
 	reQ.NoErrorf(err, `Unexpected error during Select: %v`, err)
-	reQ.Equal(2, len(appliedMigrations))
+	reQ.Equal(3, len(appliedMigrations))
+
 	t.Log(`Repeating rx.Migrate must be idempotent!`)
 	err = rx.Migrate(`testdata/migrations_01.sql`, dsn, `up`)
 	reQ.NoErrorf(err, `Unexpected error during repeated migration: %v`, err)
 	appliedMigrations, err = rxM.Select(`direction=:dir`, rx.SQLMap{`dir`: `up`})
 	reQ.NoErrorf(err, `Unexpected error during Select: %v`, err)
-	reQ.Equal(2, len(appliedMigrations))
+	reQ.Equal(3, len(appliedMigrations))
 }
 
 func TestGenerate_no_such(t *testing.T) {
@@ -684,7 +686,7 @@ func TestGenerate_example_model(t *testing.T) {
 	rx.QueryTemplates[`SELECT_TABLE_INFO_sqlite3`] = `select * from blabla`
 	err = rx.Generate(rx.DSN, packagePath)
 	t.Logf("%v", err)
-	reQ.ErrorContains(err, `DB().Select`)
+	reQ.ErrorContains(err, `no such table: blabla`)
 	rx.QueryTemplates[`SELECT_TABLE_INFO_sqlite3`] = selectTBI
 
 	// now produce error for reading directory - should never happen!

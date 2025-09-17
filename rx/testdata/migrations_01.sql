@@ -272,3 +272,21 @@ DROP TABLE IF EXISTS domove;
 DROP TABLE IF EXISTS stranici;
 DROP TABLE IF EXISTS celini;
 
+-- 202509172303 up
+CREATE TABLE other_types (
+-- This is a dummy table to just cover the cases for type generation for Go,
+-- found in rx/utils.go:sql2GoTypeAndTag
+
+id ENUM PRIMARY KEY,
+yes_or_no BOOL NOT NULL DEFAULT 'false',
+published TINYINT NOT NULL DEFAULT 0,
+states SMALLINT NOT NULL DEFAULT 0,
+big BIGINT NOT NULL DEFAULT 0,
+byte BYTEA NOT NULL DEFAULT 0x00,
+float4 FLOAT4 NOT NULL DEFAULT 0.0,
+deci DECIMAL NOT NULL DEFAULT 0.000,
+unkn UNKNOWN NOT NULL DEFAULT 0
+);
+
+-- 202509172303 down
+DROP TABLE IF EXISTS other_types;
