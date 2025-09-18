@@ -1,9 +1,21 @@
 /*
-Package rx provides a minimalistic object to database-rows mapper and wrapper
-for [sqlx]. It provides functions, interfaces and a generic data type.
-It implements the provided interfaces to work easily with sets of database
-records. The relations' constraints are left to be managed by the database and
-you. This may be improved in a future release.
+Package rx provides a minimalistic object to database-rows mapper by using the
+scanning capabilities of [sqlx]. It is also an SQL builder via SQL templates.
+
+During runtime the templates get filled in with metadata (tables and columns
+from the provided data structures) and WHERE clauses, written by you - the
+programmer in SQL. The rendered by [fasttemplate] SQL query is prepared and
+executed by [sqlx].
+
+In other words, package `rx` provides functions, interfaces and a generic data
+type [Rx], which wraps data structures, provided by you. [Rx] implements the
+provided interfaces to work easily with sets of database records. The
+relations' constraints are left to be managed by the database.
+
+To ease the programmer's work with the database, `rx` provides two functions -
+[Migrate] and [Generate]. The first executes sets of SQL statements from a file
+to migrate the the database schema to a new state and the second re-generates
+the structs, mappped to rows in tables.
 
 By default the current implementation assumes that the primary key name is
 `ID`. Of course the primary key can be more than one column and with arbitrary
@@ -312,7 +324,7 @@ func (m *Rx[R]) Columns() []string {
 */
 
 /*
-Insert inserts a set of Rowx instances (without their primary key values) and
+Insert inserts a slice of Rowx instances (without their primary key values) and
 returns [sql.Result] and [error]. The value for the autoincremented primary key
 (usually ID column) is left to be set by the database.
 
@@ -322,22 +334,19 @@ is inserted in its own statement. This may change in a future release. If there
 are no records to be inserted, [Rx.Insert] panics.
 
 If you need to insert a [Rowx] structure with a specific value for ID, add a
-tag to the ID column `rx:id,no_auto` or use directly [sqlx].
+tag to the ID column `rx:"id,no_auto"` or use directly [sqlx].
 
-If you want to skip any field during insert add, a tag to it `rx:field_name,auto`.
+If you want to skip any field during insert (including `id`) add, a tag to it
+`rx:"field_name,auto"`.
 */
 func (m *Rx[R]) Insert() (sql.Result, error) {
-	dataLen := len(m.Data())
-	if dataLen == 0 {
+	if len(m.Data()) == 0 {
 		Logger.Panic("Cannot insert, when no data is provided!")
 	}
 	query := m.renderInsertQuery()
 	Logger.Debugf("Rendered query: %s", query)
-	if dataLen > 1 {
-		return m.insertMany(query)
-	}
-	Logger.Debugf("Inserting row: %+v", m.data[0])
-	return DB().NamedExec(query, m.data[0])
+	Logger.Debugf("Inserting rows: %+v", m.Data())
+	return DB().NamedExec(query, m.Data())
 }
 
 func (m *Rx[R]) renderInsertQuery() string {
@@ -367,28 +376,6 @@ func (m *Rx[R]) renderInsertQuery() string {
 	}
 	query := RenderSQLTemplate(`INSERT`, stash)
 	return query
-}
-
-func (m *Rx[R]) insertMany(query string) (sql.Result, error) {
-	var (
-		tx *sqlx.Tx
-		r  sql.Result
-		e  error
-	)
-	tx = DB().MustBegin()
-	// The rollback will be ignored if the tx has been committed already.
-	defer func() { _ = tx.Rollback() }()
-	for _, row := range m.Data() {
-		// Logger.Debugf("Inserting row: %+v", row)
-		r, e = tx.NamedExec(query, row)
-		if e != nil {
-			return r, e
-		}
-	}
-	if e = tx.Commit(); e != nil {
-		return r, e
-	}
-	return r, e
 }
 
 /*

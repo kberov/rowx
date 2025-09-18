@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"fmt"
+	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -51,18 +52,25 @@ CREATE TABLE foo(
 );
 PRAGMA foreign_keys = ON;
 `
+var drops = `
+PRAGMA foreign_keys = OFF;
+DROP TABLE IF EXISTS users;
+DROP TABLE IF EXISTS user_group;
+DROP TABLE IF EXISTS groups;
+DROP TABLE IF EXISTS foo;
+`
 
 type Users struct {
 	LoginName string
 	GroupID   sql.NullInt32
-	ChangedBy sql.NullInt32
+	ChangedBY sql.NullInt32
 	ID        int32 `rx:"id,auto"`
 }
 
 var users = []Users{
-	Users{LoginName: "first", ChangedBy: sql.NullInt32{0, false}},
-	Users{LoginName: "the_second", ChangedBy: sql.NullInt32{1, true}},
-	Users{LoginName: "the_third", ChangedBy: sql.NullInt32{1, true}},
+	Users{LoginName: "first", ChangedBY: sql.NullInt32{0, false}},
+	Users{LoginName: "the_second", ChangedBY: sql.NullInt32{1, true}},
+	Users{LoginName: "the_third", ChangedBY: sql.NullInt32{1, true}},
 }
 
 type Groups struct {
@@ -86,7 +94,7 @@ func multiExec(e sqlx.Execer, query string) {
 }
 
 func init() {
-	rx.Logger.SetLevel(log.INFO)
+	rx.Logger.SetLevel(log.DEBUG)
 	multiExec(rx.DB(), schema)
 }
 
@@ -109,7 +117,7 @@ type whereParams struct{ GroupID int32 }
 type U struct {
 	table     string
 	LoginName string
-	ID        int32 `rx:"id,auto"`
+	ID        int32 // `rx:"id,auto"`
 }
 
 func (u *U) Table() string {
@@ -612,6 +620,98 @@ func TestWrap(t *testing.T) {
 	reQ.Equal(`second record`, secondFoo.Description)
 }
 
+func TestMigrate_up(t *testing.T) {
+	rx.ResetDB()
+	rx.ResetDB() // singleDB is already nil, but we want to cover more code.
+	reQ := require.New(t)
+	dsn := `testdata/migrate_test.sqlite`
+	err := rx.Migrate(`testdata/migr.sql`, dsn, `up`)
+	reQ.ErrorContains(err, `no such file or directory`)
+
+	rx.ResetDB()
+	multiExec(rx.DB(), drops)
+	dsn = rx.DSN // `testdata/migrate_test.sqlite`
+	err = rx.Migrate(`testdata/migrations_01.sql`, dsn, `up`)
+	reQ.NoErrorf(err, `Unexpected error during migration: %v`, err)
+
+	// now all 'up' migrations, found in migrations_01 must be registered as
+	// applied in rx.MigrationsTable
+	rxM := rx.NewRx[rx.Migrations]()
+	appliedMigrations, err := rxM.Select(`direction=:dir`, rx.SQLMap{`dir`: `up`})
+	reQ.NoErrorf(err, `Unexpected error during Select: %v`, err)
+	reQ.Equal(3, len(appliedMigrations))
+
+	t.Log(`Repeating rx.Migrate must be idempotent!`)
+	err = rx.Migrate(`testdata/migrations_01.sql`, dsn, `up`)
+	reQ.NoErrorf(err, `Unexpected error during repeated migration: %v`, err)
+	appliedMigrations, err = rxM.Select(`direction=:dir`, rx.SQLMap{`dir`: `up`})
+	reQ.NoErrorf(err, `Unexpected error during Select: %v`, err)
+	reQ.Equal(3, len(appliedMigrations))
+}
+
+func TestGenerate_no_such(t *testing.T) {
+	reQ := require.New(t)
+	packagePath := os.Getenv("EXAMPLE_MODEL")
+	t.Logf("Will generate model in '%s', but will get error as the path does not exist yet.", packagePath)
+	err := rx.Generate(rx.DSN, packagePath)
+	reQ.ErrorContains(err, `no such file or directory`)
+}
+
+func TestGenerate_example_model(t *testing.T) {
+	reQ := require.New(t)
+	packagePath := os.Getenv("EXAMPLE_MODEL")
+	t.Logf("Will generate model in '%s' after creating it.", packagePath)
+	err := os.MkdirAll(packagePath, 0750)
+	reQ.NoErrorf(err, `Unexpected error: %+v`, err)
+	err = rx.Generate(rx.DSN, packagePath)
+	reQ.NoErrorf(err, `Unexpected error during rx.Generate: %+v`, err)
+
+	// now produce error while opening file for writing
+	err = os.Chmod(packagePath+`/model_structs.go`, 0400)
+	if err != nil {
+		t.Errorf("os.Chmod: %s", err.Error())
+	}
+	err = rx.Generate(rx.DSN, packagePath)
+	t.Logf("%v", err)
+	reQ.ErrorContains(err, `model_structs.go`)
+	reQ.ErrorContains(err, `permission denied`)
+
+	// now produce `regenerated == true` to cover this case
+	_ = os.Chmod(packagePath+`/model_structs.go`, 0600)
+	err = rx.Generate(rx.DSN, packagePath)
+	reQ.NoErrorf(err, `Unexpected error during rx.Generate: %+v`, err)
+
+	// now produce err from DB().Select
+	selectTBI := rx.QueryTemplates[`SELECT_TABLE_INFO_sqlite3`]
+	rx.QueryTemplates[`SELECT_TABLE_INFO_sqlite3`] = `select * from blabla`
+	err = rx.Generate(rx.DSN, packagePath)
+	t.Logf("%v", err)
+	reQ.ErrorContains(err, `no such table: blabla`)
+	rx.QueryTemplates[`SELECT_TABLE_INFO_sqlite3`] = selectTBI
+
+	// now produce error for reading directory - should never happen!
+	_ = os.Chmod(packagePath, 0300) //nolint:gosec // G302
+	err = rx.Generate(rx.DSN, packagePath)
+	t.Logf("%v", err)
+	reQ.ErrorContains(err, `rx/example/model: permission denied`)
+	_ = os.Chmod(packagePath, 0750) //nolint:gosec // G302
+}
+
+func TestMigrate_down(t *testing.T) {
+	reQ := require.New(t)
+	dsn := rx.DSN // `testdata/migrate_test.sqlite`
+	err := rx.Migrate(`testdata/migrations_01.sql`, dsn, `down`)
+	reQ.NoErrorf(err, `Unexpected error during migration: %v`, err)
+}
+
+func TestMigrate_left(t *testing.T) {
+	reQ := require.New(t)
+	dsn := rx.DSN // `testdata/migrate_test.sqlite`
+	err := rx.Migrate(`testdata/migrations_01.sql`, dsn, `left`)
+	t.Log(err.Error())
+	reQ.ErrorContains(err, `direction can be only`)
+}
+
 func TestPanics(t *testing.T) {
 	tests := []struct {
 		fn   func()
@@ -651,6 +751,12 @@ func TestPanics(t *testing.T) {
 				_ = rx.Migrate(`../../../testdata/migrations_01.sql`, dsn, `down`)
 			},
 		},
+		{
+			name: `Generate_unsafe_path`,
+			fn: func() {
+				_ = rx.Generate(rx.DSN, `../../../example/model`)
+			},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -670,55 +776,10 @@ func expectPanic(t *testing.T, f func()) {
 	f()
 }
 
-func TestMigrate_up(t *testing.T) {
-	rx.ResetDB()
-	rx.ResetDB() // singleDB is now nil, but we want to cover more code.
-	reQ := require.New(t)
-	dsn := rx.DSN // `testdata/migrate_test.sqlite`
-	err := rx.Migrate(`testdata/migr.sql`, dsn, `up`)
-	reQ.ErrorContains(err, `no such file or directory`)
-
-	err = rx.Migrate(`testdata/migrations_01.sql`, dsn, `up`)
-	reQ.NoErrorf(err, `Unexpected error during migration: %v`, err)
-	// now all migrations, found in migrations_01 must be registered as applied
-	// in rx.MigrationsTable
-	rxM := rx.NewRx[rx.Migrations]()
-	appliedMigrations, err := rxM.Select(`direction=:dir`, rx.SQLMap{`dir`: `up`})
-	reQ.NoErrorf(err, `Unexpected error during Select: %v`, err)
-	reQ.Equal(2, len(appliedMigrations))
-	t.Log(`Repeating rx.Migrate must be idempotent!`)
-	err = rx.Migrate(`testdata/migrations_01.sql`, dsn, `up`)
-	reQ.NoErrorf(err, `Unexpected error during repeated migration: %v`, err)
-	appliedMigrations, err = rxM.Select(`direction=:dir`, rx.SQLMap{`dir`: `up`})
-	reQ.NoErrorf(err, `Unexpected error during Select: %v`, err)
-	reQ.Equal(2, len(appliedMigrations))
-}
-
-func TestMigrate_down(t *testing.T) {
-	reQ := require.New(t)
-	dsn := rx.DSN // `testdata/migrate_test.sqlite`
-	err := rx.Migrate(`testdata/migrations_01.sql`, dsn, `down`)
-	reQ.NoErrorf(err, `Unexpected error during migration: %v`, err)
-}
-
-func TestMigrate_left(t *testing.T) {
-	reQ := require.New(t)
-	dsn := rx.DSN // `testdata/migrate_test.sqlite`
-	err := rx.Migrate(`testdata/migrations_01.sql`, dsn, `left`)
-	t.Log(err.Error())
-	reQ.ErrorContains(err, `direction can be only`)
-}
-
 // TestResetDB resets the database it self, while rx.ResetDB resets the
-// connection only (which should drop the whole :memory: database).
+// connection only.
 func TestResetDB(t *testing.T) {
-	drops := `
-PRAGMA foreign_keys = OFF;
-DROP TABLE IF EXISTS users;
-DROP TABLE IF EXISTS user_group;
-DROP TABLE IF EXISTS groups;
-DROP TABLE IF EXISTS foo;
-`
+	rx.ResetDB()
 	multiExec(rx.DB(), drops)
 	multiExec(rx.DB(), schema)
 	t.Log(`Database is reset.`)
@@ -854,11 +915,11 @@ func ExampleRx_Insert() {
 	if e != nil {
 		println(`Error inserting new users:`, e)
 	}
-	// udata, e := rx.NewRx[Users]().Select(`id>=0`, nil)
-	// fmt.Printf("Selected []Users %+v; %+v\n", udata, e)
+	// users, e := rx.NewRx[Users]().Select(`id>=0`, nil)
+	// fmt.Printf("Selected []Users %+v; %+v\n", users, e)
 	groupRs, e := rx.NewRx[Groups](Groups{Name: `fifth`}).Insert()
 	if e != nil {
-		println(`Error inserting new group:`, e)
+		println(`Error inserting new group:`, e.Error())
 	}
 	lastGroupID, _ := groupRs.LastInsertId()
 	fmt.Printf("Inserted new group with id: %d\n", lastGroupID)

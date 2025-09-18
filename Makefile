@@ -1,4 +1,6 @@
 BIN="./bin"
+EXAMPLE=./example
+export EXAMPLE_MODEL=${EXAMPLE}/model
 SRC=$(find . -name "*.go")
 BASE_PACKAGE := github.com/kberov/rowx
 
@@ -18,11 +20,13 @@ fmt:
 
 lint:
 	$(info ******************** running lint tools ********************)
-	golangci-lint run # -v
+	golangci-lint run --config ./.golangci.yaml # -v
 
-test: install_deps
+test: install_deps clean
 	$(info ******************** running tests ********************)
 	go test -failfast -v  ./... -coverprofile=coverage.html	
+	# test id the produced EXAMPLE_MODEL compiles too
+	go build ./...
 	go tool cover -html=coverage.html
 
 install_deps:
@@ -31,6 +35,8 @@ install_deps:
 
 clean:
 	rm -rf $(BIN)
+	rm -rf rx/$(EXAMPLE)
+	rm -rf rx/testdata/migrate_test.sqlite
 
 update_deps:
 	go get -u -t -v ./...
