@@ -324,7 +324,7 @@ func (m *Rx[R]) Columns() []string {
 */
 
 /*
-Insert inserts a set of Rowx instances (without their primary key values) and
+Insert inserts a slice of Rowx instances (without their primary key values) and
 returns [sql.Result] and [error]. The value for the autoincremented primary key
 (usually ID column) is left to be set by the database.
 
