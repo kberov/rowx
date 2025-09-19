@@ -58,6 +58,7 @@ import (
 	"github.com/jmoiron/sqlx"
 	"github.com/jmoiron/sqlx/reflectx"
 	"github.com/labstack/gommon/log"
+	_ "github.com/mattn/go-sqlite3" //no-lint:revive
 )
 
 const (

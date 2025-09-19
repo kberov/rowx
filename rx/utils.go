@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"regexp"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -128,19 +129,21 @@ Migrate executes all not applied schema migrations with the given `direction`,
 found in `filePath` and stores in [MigrationsTable] the version, direction and
 file path of every applied migration. The migrations comments (headers) are
 expected to mach `^--\s*(\d{1,12})\s*(up|down)$`. For example: `--202506092333
-up`. All SQL statements must end with semicolumn -- `;`. It is used to split
-the migartion into separate statements to be executed. Each migration is
-executed in a transaction. The migrations are applied sequentially in the order
-they appear in the file.
+up`. All SQL statements in a migration are executed at once as one
+transaction.
 
-If the `direction` is `up` the migrations are applied in ascending order.
+If the `direction` is `up`, all migrations in a file are applied in FIFO order.
 
-If the `direction` is `down` the migrations are applied in desscending order.
+If the `direction` is `down`, all migrations in a file are applied in LIFO order.
 
-The explained workflow allows to have more than one migration in the same file
-for logically different parts of the application. For example different modules
-have their own different migrations but they in some cases have to be applied
-in one run - a new release.
+The explained workflow allows to have more than one migration (a set of
+statements) in the same file for logically different parts of the application.
+For example different modules have their own different migrations but they in
+some cases have to be applied in one run - a new release.
+
+Migrate is often followed by executing [Generate], if the schema of the
+database is modified - new columns or tables are added, modified or removed
+etc.
 */
 func Migrate(filePath, dsn, direction string) error {
 	if unknown(direction) {
@@ -152,21 +155,25 @@ func Migrate(filePath, dsn, direction string) error {
 		long-running process? We need another separate singleDB.
 	*/
 	DSN = dsn
-	DB().MustExec(RenderSQLTemplate(`CREATE_MIGRATIONS_TABLE`, SQLMap{`table`: MigrationsTable}))
+	DB().MustExec(RenderSQLTemplate(`CREATE_MIGRATIONS_TABLE`, Map{`table`: MigrationsTable}))
 
 	migrations, err := parseMigrationFile(filePath)
+	if err != nil {
+		return err
+	}
 	if direction == down.String() {
 		slices.Reverse(migrations)
 	}
-	for i, v := range migrations {
+
+	for _, v := range migrations {
+		statements := v.Statements.String()
 		if v.Direction != direction {
-			Logger.Debugf(`Skipping not applicable direction %s %s: %s ...`, v.Version, v.Direction, v.Statements.String()[:30])
+			Logger.Infof(`Unaplicable %s %s: %s...`, v.Version, v.Direction, substr(statements, 30))
 			continue
 		}
-		Logger.Debugf(`Applying %d . %s|%s %s ...`,
-			i+1, v.Version, v.Direction, v.Statements.String()[:22])
+		Logger.Infof(`Applying %s %s: %s...`, v.Version, v.Direction, substr(statements, 30))
 
-		if err = multiExec(DB(), v.Statements.String()); err != nil {
+		if err = multiExec(DB(), statements); err != nil {
 			return err
 		}
 		if _, err = NewRx(Migrations{
@@ -183,35 +190,35 @@ func Migrate(filePath, dsn, direction string) error {
 	return nil
 }
 
+func substr(str string, lenChars int) string {
+	var newStr strings.Builder
+	for i, char := range str {
+		newStr.WriteRune(char)
+		if i == lenChars-1 {
+			break
+		}
+	}
+	return newStr.String()
+}
+
 func unknown(direction string) bool {
 	return direction != up.String() && direction != down.String()
 }
 
 /*
 multiExec was stollen from sqlx_test.go and slightly modified as a poor's man
-migration. It executes all stementss found in a big multy query string ias one
-transaction.
+migration. It executes all stements, found in a big multy query string, at once
+and in one transaction.
 */
 func multiExec(db *sqlx.DB, query string) (err error) {
-	stmts := strings.Split(query, ";")
-	if len(strings.TrimSpace(stmts[len(stmts)-1])) == 0 {
-		stmts = stmts[:len(stmts)-1]
-	}
 	tx := db.MustBegin()
 	// The rollback will be ignored if the tx has been committed already.
 	defer func() { _ = tx.Rollback() }()
-
-	for i, s := range stmts {
-		s = strings.TrimSpace(s)
-		if len(s) == 0 {
-			continue
-		}
-		Logger.Infof("Exec %02d: %s", i+1, s)
-		_, err = tx.Exec(s)
-		if err != nil {
-			return fmt.Errorf(`%s: %s`, err.Error(), s)
-		}
+	_, err = tx.Exec(query)
+	if err != nil {
+		return err
 	}
+
 	if err = tx.Commit(); err != nil {
 		return err
 	}
@@ -251,8 +258,8 @@ func parseMigrationFile(filePath string) (migrations []migration, err error) {
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if version, direction := parseMigrationHeader(line); version != `` && direction != `` {
-			_, err = NewRx[Migrations]().Get(
-				`version=:ver AND direction =:dir`, SQLMap{`ver`: version, `dir`: direction})
+			v, err := NewRx[Migrations]().Get(
+				`version=:ver AND direction =:dir`, Map{`ver`: version, `dir`: direction})
 			// If this migration is not found in the applied migrations, we
 			// must start collecting its lines to apply it.
 			if err != nil && errors.Is(err, sql.ErrNoRows) {
@@ -261,6 +268,7 @@ func parseMigrationFile(filePath string) (migrations []migration, err error) {
 				migrations = append(migrations,
 					migration{Version: currentVersion, Direction: direction})
 			} else if err == nil {
+				Logger.Infof(`applied "%s %s" during a previous run...`, v.Version, v.Direction)
 				versionIsApplied = true
 			}
 			continue
@@ -313,7 +321,7 @@ func Generate(dsn string, packagePath string) error {
 	DSN = dsn
 	dh, err := safeOpen(packagePath)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w. The directory must exist already", err)
 	}
 	defer dh.Close()
 	sql := QueryTemplates[`SELECT_TABLE_INFO_sqlite3`].(string)
@@ -331,21 +339,25 @@ func Generate(dsn string, packagePath string) error {
 	path := strings.Split(dirName, sep)
 	packageName := path[len(path)-1]
 	structsFileName := dirName + sep + packageName + "_structs.go"
-	if err = os.WriteFile(structsFileName, []byte(structsFileString.String()), 0600); err != nil {
-		return fmt.Errorf("os.WriteFile: %w", err)
-	}
 	// Now we will know if we are ran for the first time for this directory or not.
 	files, _ := dh.ReadDir(0)
 	regenerated := false
 	packageFileName := packageName + ".go"
+	rePrefix := ``
 	for _, f := range files {
 		if f.Name() == packageFileName {
 			regenerated = true
+			rePrefix = `re-`
 		}
+	}
+	Logger.Infof(`%sgenerating %s...`, rePrefix, structsFileName)
+	if err = os.WriteFile(structsFileName, []byte(structsFileString.String()), 0600); err != nil {
+		return fmt.Errorf("os.WriteFile: %w", err)
 	}
 	if !regenerated {
 		modelAsString := prepareModelFileContents(packageName)
 		modelFileName := dirName + sep + packageFileName
+		Logger.Infof(`generating %s...`, modelFileName)
 		return os.WriteFile(modelFileName, []byte(modelAsString), 0600)
 	}
 	return err
@@ -392,7 +404,7 @@ func preparePackageHeaderForGeneratedStructs(packagePath string, fileString *str
 	pathToPackage := strings.Split(packagePath, string(os.PathSeparator))
 	packageName := pathToPackage[len(pathToPackage)-1]
 	fileString.WriteString(
-		replace(packageHeader, `${`, `}`, SQLMap{
+		replace(packageHeader, `${`, `}`, Map{
 			`package`:  packageName,
 			`Package`:  SnakeToCamel(packageName),
 			`database`: DSN,
@@ -425,43 +437,54 @@ func (u *${TableName}) Columns() []string {
 }
 `
 
-func appendRowToLastStructTemplate(structsStashes *[]map[string]any, i int, columns []columnInfo) {
-	c := 0
-	columnName := "\n\t\t\"" + columns[i].CName + "\","
+func appendRowToLastStructTemplate(structsStashes *[]Map, i int, columns []columnInfo) {
+	last := 0
+	columnName := "\n\t\t\"" + columns[i].CName + `",`
 	if i == 0 {
+		fieldsWithGoTypes := make([]fieldWithGoType, 0, 10)
 		// SA4006: this value of structsStashes is never used (staticcheck)
 		//nolint:staticcheck
-		*structsStashes = append(*structsStashes, map[string]any{
-			`TableName`:    SnakeToCamel(columns[i].TableName),
-			`table_name`:   columns[i].TableName,
-			`fields`:       sql2GoTypeAndTag(columns[i]),
-			`column_names`: columnName,
+		*structsStashes = append(*structsStashes, Map{
+			`TableName`:         SnakeToCamel(columns[i].TableName),
+			`table_name`:        columns[i].TableName,
+			`fieldsWithGoTypes`: &fieldsWithGoTypes,
+			`fields`:            sql2GoTypeAndTag(columns[i], &fieldsWithGoTypes),
+			`column_names`:      columnName,
 		})
 		return
 	}
 
 	l := len(*structsStashes)
-	c = l - 1
-
-	if (*structsStashes)[c][`table_name`] != columns[i].TableName {
+	last = l - 1
+	// Start a new stash for a struct(table) if the next column's TableName is
+	// different.
+	if (*structsStashes)[last][`table_name`] != columns[i].TableName {
+		fieldsWithGoTypes := make([]fieldWithGoType, 0, 10)
 		// SA4006: this value of structsStashes is never used (staticcheck)
 		//nolint:staticcheck
-		*structsStashes = append(*structsStashes, map[string]any{
-			`TableName`:    SnakeToCamel(columns[i].TableName),
-			`table_name`:   columns[i].TableName,
-			`fields`:       sql2GoTypeAndTag(columns[i]),
-			`column_names`: columnName,
+		*structsStashes = append(*structsStashes, Map{
+			`TableName`:         SnakeToCamel(columns[i].TableName),
+			`table_name`:        columns[i].TableName,
+			`fieldsWithGoTypes`: &fieldsWithGoTypes,
+			`fields`:            sql2GoTypeAndTag(columns[i], &fieldsWithGoTypes),
+			`column_names`:      columnName,
 		})
 		return
 	}
-	(*structsStashes)[c][`fields`] = (*structsStashes)[c][`fields`].(string) + sql2GoTypeAndTag(columns[i])
-	(*structsStashes)[c][`column_names`] = (*structsStashes)[c][`column_names`].(string) + columnName
+	// Always work with the lastly appended struct data.
+	fieldsWithGoTypes := (*structsStashes)[last][`fieldsWithGoTypes`].(*[]fieldWithGoType)
+	(*structsStashes)[last][`fields`] = (*structsStashes)[last][`fields`].(string) + sql2GoTypeAndTag(columns[i], fieldsWithGoTypes)
+	(*structsStashes)[last][`column_names`] = (*structsStashes)[last][`column_names`].(string) + columnName
 }
 
-// sql2GoTypeAndTag converts SQL column types to Go types. Parts of the code
+type fieldWithGoType struct {
+	field, goType string
+}
+
+// sql2GoTypeAndTag converts SQL column types to Go types. Case statemnets
 // were shamelessly stollen from https://github.com/go-jet/jet
 // generator/template/model_template.go: toGoType(column metadata.Column).
-func sql2GoTypeAndTag(column columnInfo) string {
+func sql2GoTypeAndTag(column columnInfo, fieldsSlice *[]fieldWithGoType) string {
 	// Logger.Debugf(`column.CType:%s;column.NotNull:%v`, column.CType, column.NotNull)
 	var colType = strings.ToLower(strings.TrimSpace(strings.Split(column.CType, "(")[0]))
 	var goType string
@@ -512,10 +535,10 @@ func sql2GoTypeAndTag(column columnInfo) string {
 	var neededTag string
 	columnName := strings.ToLower(column.CName)
 	if columnName == `id` {
-		neededTag = "`" + ReflectXTag + `:"` + columnName + `,auto"` + "`"
+		neededTag = " `" + ReflectXTag + `:"` + columnName + `,auto"` + "`"
 	}
-	field := "\t" + SnakeToCamel(columnName) + ` ` + goType + " " + neededTag + "\n"
-
+	field := "\t" + SnakeToCamel(columnName) + ` ` + goType + neededTag + "\n"
+	*fieldsSlice = append(*fieldsSlice, fieldWithGoType{field, goType})
 	return field
 }
 
@@ -536,25 +559,127 @@ func sql2IfNullableGoType(column columnInfo, defaultType string) string {
 }
 
 func prepareGeneratedStructs(columns []columnInfo, fileString *strings.Builder) {
-	structsInfo := make([]map[string]any, 0, 10)
+	structsInfo := make([]Map, 0, 10)
 
 	for i := range columns {
 		appendRowToLastStructTemplate(&structsInfo, i, columns)
 	}
 	// Logger.Debugf(`structsInfo: %+v`, structsInfo)
 	for _, v := range structsInfo {
+		allignStructFields(v)
 		fileString.WriteString(replace(structTemplate, `${`, `}`, v))
 	}
 }
 
 type columnInfo struct {
+	SQL       string `rx:"sql"`
 	TableName string
-	CID       uint8
 	CName     string
 	// CType sql.ColumnType
 	CType        string
-	NotNull      bool
 	DefaultValue sql.NullString
+	CID          uint8
 	PK           uint8
-	SQL          string `rx:"sql"`
+	NotNull      bool
+}
+
+func allignStructFields(structInfo Map) {
+	columns := *(structInfo[`fieldsWithGoTypes`].(*[]fieldWithGoType))
+	sort.Slice(columns, func(i, j int) bool {
+		ai := alignTable[columns[i].goType]
+		aj := alignTable[columns[j].goType]
+		if ai == aj {
+			return sizeTable[columns[i].goType] > sizeTable[columns[j].goType]
+		}
+		return ai > aj
+	})
+	// Logger.Debugf(`aligned fieldsWithGoTypes: [%+v]`, structInfo[`fieldsWithGoTypes`])
+	var alignedFields strings.Builder
+	for _, v := range columns {
+		alignedFields.WriteString(v.field)
+	}
+	structInfo[`fields`] = alignedFields.String()
+}
+
+var alignTable = map[string]int{
+	// Основни типове
+	"bool":    1,
+	"int8":    1,
+	"uint8":   1,
+	"int16":   2,
+	"uint16":  2,
+	"int32":   4,
+	"uint32":  4,
+	"float32": 4,
+	"int64":   8,
+	"uint64":  8,
+	"float64": 8,
+	"int":     8, // 64-бит
+	"string":  8,
+	"[]byte":  8,
+
+	// Често срещани типове
+	"time.Time": 8,
+
+	// Класически Null типове
+	"sql.NullInt64":   8,
+	"sql.NullFloat64": 8,
+	"sql.NullBool":    8,
+	"sql.NullString":  8,
+
+	// Обобщен Null[T] - Go 1.22+
+	"sql.Null[int8]":      1,
+	"sql.Null[uint8]":     1,
+	"sql.Null[int16]":     2,
+	"sql.Null[uint16]":    2,
+	"sql.Null[int32]":     4,
+	"sql.Null[uint32]":    4,
+	"sql.Null[float32]":   4,
+	"sql.Null[int64]":     8,
+	"sql.Null[uint64]":    8,
+	"sql.Null[float64]":   8,
+	"sql.Null[string]":    8, // string е pointer+len, align=8
+	"sql.Null[time.Time]": 8,
+	"sql.Null[[]byte]":    8,
+}
+
+var sizeTable = map[string]int{
+	"bool":    1,
+	"int8":    1,
+	"uint8":   1,
+	"int16":   2,
+	"uint16":  2,
+	"int32":   4,
+	"uint32":  4,
+	"float32": 4,
+	"int64":   8,
+	"uint64":  8,
+	"float64": 8,
+	"int":     8,
+	"string":  16,
+	"[]byte":  24,
+
+	// Често срещани типове
+	"time.Time": 24,
+
+	// Класически Null типове
+	"sql.NullInt64":   16,
+	"sql.NullFloat64": 16,
+	"sql.NullBool":    16,
+	"sql.NullString":  32,
+
+	// Обобщени Null[T] Го 1.22+ (приблизителни стойности)
+	"sql.Null[int8]":      2,
+	"sql.Null[uint8]":     2,
+	"sql.Null[int16]":     4,
+	"sql.Null[uint16]":    4,
+	"sql.Null[int32]":     8,
+	"sql.Null[uint32]":    8,
+	"sql.Null[float32]":   8,
+	"sql.Null[int64]":     16,
+	"sql.Null[uint64]":    16,
+	"sql.Null[float64]":   16,
+	"sql.Null[string]":    32,
+	"sql.Null[time.Time]": 32,
+	"sql.Null[[]byte]":    40,
 }
