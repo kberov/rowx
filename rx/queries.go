@@ -7,9 +7,10 @@ import (
 	"github.com/valyala/fasttemplate"
 )
 
-// SQLMap is a map of name/query. Each entry has a name and an SQL query used
-// in some method.
-type SQLMap map[string]any
+// Map is a map of [string]any. It is used for [QueryTemplates], for binding
+// variables for sqlx statements, for variables for fasttemplate functions and
+// wherever else appllicable.
+type Map map[string]any
 
 var (
 	/*
@@ -19,7 +20,7 @@ var (
 		as templates. We use [fasttemplate.ExecuteStringStd] to construct ready
 		for use by [sqlx] queries.
 	*/
-	QueryTemplates = SQLMap{
+	QueryTemplates = Map{
 		`INSERT`: `INSERT INTO ${table} (${columns}) VALUES ${placeholders}`,
 		`SELECT`: `SELECT ${columns} FROM ${table} ${WHERE} LIMIT ${limit} OFFSET ${offset}`,
 		`GET`:    `SELECT ${columns} FROM ${table} ${WHERE} LIMIT 1`,

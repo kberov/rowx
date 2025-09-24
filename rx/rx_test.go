@@ -582,7 +582,7 @@ func TestWrap(t *testing.T) {
 	mm := &myModel[Groups]{}
 	reQ.Equalf(`groups`, mm.Table(), `Wrong table for myModel: %s`, mm.Table())
 
-	data, err := mm.Select(`id >:id`, rx.SQLMap{`id`: 1})
+	data, err := mm.Select(`id >:id`, rx.Map{`id`: 1})
 	reQ.NoError(err, `Unexpected error:%#v`, err)
 	reQ.Equalf(3, len(data), `Expected 3 rows from the database but got %d.`, len(data))
 
@@ -637,16 +637,16 @@ func TestMigrate_up(t *testing.T) {
 	// now all 'up' migrations, found in migrations_01 must be registered as
 	// applied in rx.MigrationsTable
 	rxM := rx.NewRx[rx.Migrations]()
-	appliedMigrations, err := rxM.Select(`direction=:dir`, rx.SQLMap{`dir`: `up`})
+	appliedMigrations, err := rxM.Select(`direction=:dir`, rx.Map{`dir`: `up`})
 	reQ.NoErrorf(err, `Unexpected error during Select: %v`, err)
-	reQ.Equal(3, len(appliedMigrations))
+	reQ.Equal(4, len(appliedMigrations))
 
 	t.Log(`Repeating rx.Migrate must be idempotent!`)
 	err = rx.Migrate(`testdata/migrations_01.sql`, dsn, `up`)
 	reQ.NoErrorf(err, `Unexpected error during repeated migration: %v`, err)
-	appliedMigrations, err = rxM.Select(`direction=:dir`, rx.SQLMap{`dir`: `up`})
+	appliedMigrations, err = rxM.Select(`direction=:dir`, rx.Map{`dir`: `up`})
 	reQ.NoErrorf(err, `Unexpected error during Select: %v`, err)
-	reQ.Equal(3, len(appliedMigrations))
+	reQ.Equal(4, len(appliedMigrations))
 }
 
 func TestGenerate_no_such(t *testing.T) {

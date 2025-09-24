@@ -1,4 +1,3 @@
-BIN="./bin"
 EXAMPLE=./example
 export EXAMPLE_MODEL=${EXAMPLE}/model
 SRC=$(find . -name "*.go")
@@ -12,11 +11,12 @@ endif
 
 default: all
 
-all: fmt test
+all: fmt test rowx
 
 fmt:
 	$(info ******************** checking formatting ********************)
 	go list -f '{{.Dir}}' ./... | xargs -I {} goimports -local $(BASE_PACKAGE) -w {}
+	go impor
 
 lint:
 	$(info ******************** running lint tools ********************)
@@ -24,8 +24,8 @@ lint:
 
 test: install_deps clean
 	$(info ******************** running tests ********************)
-	go test -failfast -v  ./... -coverprofile=coverage.html	
-	# test id the produced EXAMPLE_MODEL compiles too
+	go test -failfast -v  ./ ./... -coverprofile=coverage.html
+	# test if the produced EXAMPLE_MODEL compiles too
 	go build ./...
 	go tool cover -html=coverage.html
 
@@ -34,10 +34,15 @@ install_deps:
 	go get -v ./...
 
 clean:
-	rm -rf $(BIN)
 	rm -rf rx/$(EXAMPLE)
-	rm -rf rx/testdata/migrate_test.sqlite
+	rm -rf rx/testdata/$(EXAMPLE)
+	rm -rfv *.sqlite
+	rm -rfv */**/*.sqlite
+	rm -rfv rowx
 
 update_deps:
 	go get -u -t -v ./...
 	go mod tidy
+
+rowx: *.go rx/*.go
+	go build -ldflags '-s -w'

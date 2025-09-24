@@ -48,8 +48,8 @@ linters:
     errcheck:
       # See https://github.com/kisielk/errcheck#excluding-functions
       exclude-functions:
-        - "(*os.File).Close"
-        - "(*sqlx.Tx).Rollback"
+        - (*os.File).Close
+        - (*github.com/jmoiron/sqlx.Tx).Rollback
 
     gocognit:
       # Minimal code complexity to report.
