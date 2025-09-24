@@ -125,7 +125,7 @@ func run() int {
 		output = os.Stderr
 	}
 	if len(os.Args) < 2 {
-		usage()
+		flag.Usage()
 		return 0
 	}
 	action = os.Args[1]
@@ -139,7 +139,7 @@ func run() int {
 		return runGenerate()
 	default:
 		say("\nUknown action '${a}'!\n", output, rx.Map{`a`: action})
-		usage()
+		flag.Usage()
 		return 1
 	}
 }
