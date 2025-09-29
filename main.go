@@ -6,6 +6,11 @@ package main
 
 import "os"
 
+func init() {
+	output = os.Stderr
+	_init()
+}
+
 func main() {
 	os.Exit(run())
 }

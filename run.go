@@ -26,10 +26,6 @@ var (
 	logLevels           = map[string]log.Lvl{"DEBUG": 1, "INFO": 2, "WARN": 3, "ERROR": 4, "OFF": 5}
 )
 
-func init() {
-	_init()
-}
-
 func _init() {
 	flag.CommandLine.SetOutput(output)
 	flag.Usage = usage
@@ -92,9 +88,13 @@ ${generate}
 )
 
 func say(tpl string, out io.Writer, _map rx.Map) {
-	if _, err := fasttemplate.Execute(tpl, "${", "}", out, _map); err != nil {
-		_, _ = out.Write([]byte(err.Error()))
-	}
+	// As written for bytes.Buffer.Write, which we use to test:
+	// "The return value n is the length of p; err is always nil."
+	_, _ = fasttemplate.Execute(tpl, "${", "}", out, _map)
+	// On the other hand the possible error from an *io.File instance is
+	// io.ErrShortWrite and this is highly unlikely to happen for os.Stderr,
+	// which this function uses on the command line. And that is why we ignore
+	// the error.
 }
 
 func usage() {
@@ -121,9 +121,6 @@ func usage() {
 }
 
 func run() int {
-	if output == nil {
-		output = os.Stderr
-	}
 	if len(os.Args) < 2 {
 		flag.Usage()
 		return 0

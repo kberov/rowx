@@ -76,7 +76,11 @@ const (
 var (
 	// DefaultLogHeader is a template for rx logging.
 	DefaultLogHeader = `${prefix}:${level}:${short_file}:${line}`
-	// DSN must be set before using DB() function. It is set by default to `:memory:`.
+	// DSN must be set before using DB() function. It is set by default to
+	// `:memory:`, because the default DriverName = `sqlite3`. See also options
+	// for the connection string when using sqlite3:
+	// https://github.com/mattn/go-sqlite3?tab=readme-ov-file#connection-string
+	// .
 	DSN = `:memory:`
 	// Logger is always instantiated and the log level is set to log.DEBUG. You
 	// can change the log level as you wish. We use
@@ -155,7 +159,7 @@ type Rx[R Rowx] struct {
 }
 
 var (
-	rxRegistry = sync.Map{}
+	rxRegistry = new(sync.Map)
 )
 
 /*
