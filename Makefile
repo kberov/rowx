@@ -16,7 +16,6 @@ all: fmt test rowx
 fmt:
 	$(info ******************** checking formatting ********************)
 	go list -f '{{.Dir}}' ./... | xargs -I {} goimports -local $(BASE_PACKAGE) -w {}
-	go impor
 
 lint:
 	$(info ******************** running lint tools ********************)

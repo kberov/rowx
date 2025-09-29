@@ -54,6 +54,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/jmoiron/sqlx/reflectx"
@@ -75,7 +76,11 @@ const (
 var (
 	// DefaultLogHeader is a template for rx logging.
 	DefaultLogHeader = `${prefix}:${level}:${short_file}:${line}`
-	// DSN must be set before using DB() function. It is set by default to `:memory:`.
+	// DSN must be set before using DB() function. It is set by default to
+	// `:memory:`, because the default DriverName = `sqlite3`. See also options
+	// for the connection string when using sqlite3:
+	// https://github.com/mattn/go-sqlite3?tab=readme-ov-file#connection-string
+	// .
 	DSN = `:memory:`
 	// Logger is always instantiated and the log level is set to log.DEBUG. You
 	// can change the log level as you wish. We use
@@ -153,7 +158,9 @@ type Rx[R Rowx] struct {
 	columns []string
 }
 
-var rxRegistry = make(map[string]any, 0)
+var (
+	rxRegistry = new(sync.Map)
+)
 
 /*
 NewRx returns a new instance of a table model with optionally provided data
@@ -161,19 +168,18 @@ rows as a variadic parameter. Providing the specific type parameter to
 instantiate is mandatory if it cannot be inferred from the variadic parameter.
 */
 func NewRx[R Rowx](rows ...R) SqlxModel[R] {
-	typestr := type2str(nilRowx[R]())
-	if m, ok := rxRegistry[typestr]; ok {
+	r := nilRowx[R]()
+	typestr := type2str(r)
+	if m, ok := rxRegistry.Load(typestr); ok {
+		// Does it implement SqlxModel[R]? Then use it as such.
 		if mr, ok := Rowx(m).(SqlxModel[R]); ok {
-			Logger.Debugf(`Reusing %s...`, typestr)
 			// just reset the data
 			mr.SetData(rows)
 			return mr
 		}
 	}
-	m := &Rx[R]{data: rows}
-	Logger.Debugf(`Instantiated %#v...`, m)
-	m.r = nilRowx[R]()
-	rxRegistry[typestr] = m
+	m := &Rx[R]{data: rows, r: r}
+	rxRegistry.Store(typestr, m)
 	return m
 }
 

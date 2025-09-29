@@ -8,8 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kberov/rowx/rx"
 	"github.com/stretchr/testify/require"
+
+	"github.com/kberov/rowx/rx"
 )
 
 //nolint:gosec // G404
@@ -95,6 +96,11 @@ var cases = []struct {
 			err := os.MkdirAll(`rx/testdata/example/model`, 0750)
 			require.NoErrorf(t, err, `Unexpected error: %+v`, err)
 		},
+	},
+	{
+		args:   []string{`generate`, `-dsn`, tempDBFile, `-package`, `example/model`},
+		code:   2,
+		output: "The directory must exist already!",
 	},
 	{
 		args:   []string{`alabalanica`},
