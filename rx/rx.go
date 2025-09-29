@@ -174,8 +174,7 @@ func NewRx[R Rowx](rows ...R) SqlxModel[R] {
 		// Does it implement SqlxModel[R]? Then use it as such.
 		if mr, ok := Rowx(m).(SqlxModel[R]); ok {
 			// just reset the data
-			mr.SetData(rows)
-			return mr
+			return mr.SetData(rows)
 		}
 	}
 	m := &Rx[R]{data: rows, r: r}
