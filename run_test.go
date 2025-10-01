@@ -91,7 +91,7 @@ var cases = []struct {
 	{
 		args:   []string{`generate`, `-dsn`, tempDBFile, `-package`, `rx/testdata/example/model`},
 		code:   0,
-		output: "_structs.go...",
+		output: "_tables.go...",
 		setup: func(t *testing.T) {
 			err := os.MkdirAll(`rx/testdata/example/model`, 0750)
 			require.NoErrorf(t, err, `Unexpected error: %+v`, err)

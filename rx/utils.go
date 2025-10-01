@@ -338,7 +338,8 @@ func Generate(dsn string, packagePath string) error {
 	sep := string(os.PathSeparator)
 	path := strings.Split(dirName, sep)
 	packageName := path[len(path)-1]
-	structsFileName := dirName + sep + packageName + "_structs.go"
+	// TODO: Generate also a file for views.
+	tablesFileName := dirName + sep + packageName + "_tables.go"
 	// Now we will know if we are ran for the first time for this directory or not.
 	files, _ := dh.ReadDir(0)
 	regenerated := false
@@ -350,8 +351,8 @@ func Generate(dsn string, packagePath string) error {
 			rePrefix = `re-`
 		}
 	}
-	Logger.Infof(`%sgenerating %s...`, rePrefix, structsFileName)
-	if err = os.WriteFile(structsFileName, []byte(structsFileString.String()), 0600); err != nil {
+	Logger.Infof(`%sgenerating %s...`, rePrefix, tablesFileName)
+	if err = os.WriteFile(tablesFileName, []byte(structsFileString.String()), 0600); err != nil {
 		return fmt.Errorf("os.WriteFile: %w", err)
 	}
 	if !regenerated {

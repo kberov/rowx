@@ -667,17 +667,17 @@ func TestGenerate_example_model(t *testing.T) {
 	reQ.NoErrorf(err, `Unexpected error during rx.Generate: %+v`, err)
 
 	// now produce error while opening file for writing
-	err = os.Chmod(packagePath+`/model_structs.go`, 0400)
+	err = os.Chmod(packagePath+`/model_tables.go`, 0400)
 	if err != nil {
 		t.Errorf("os.Chmod: %s", err.Error())
 	}
 	err = rx.Generate(rx.DSN, packagePath)
 	t.Logf("%v", err)
-	reQ.ErrorContains(err, `model_structs.go`)
+	reQ.ErrorContains(err, `model_tables.go`)
 	reQ.ErrorContains(err, `permission denied`)
 
 	// now produce `regenerated == true` to cover this case
-	_ = os.Chmod(packagePath+`/model_structs.go`, 0600)
+	_ = os.Chmod(packagePath+`/model_tables.go`, 0600)
 	err = rx.Generate(rx.DSN, packagePath)
 	reQ.NoErrorf(err, `Unexpected error during rx.Generate: %+v`, err)
 
