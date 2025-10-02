@@ -1,48 +1,76 @@
 /*
-Package rx provides a minimalistic object to database-rows mapper by using the
-scanning capabilities of [sqlx]. It is also an SQL builder via SQL templates.
+Package rx provides a minimalistic objects to table-rows mapper by using the
+scanning capabilities of [sqlx]. It is also an SQL builder using SQL templates.
 
-During runtime the templates get filled in with metadata (tables and columns
-from the provided data structures) and WHERE clauses, written by you - the
-programmer in SQL. The rendered by [fasttemplate] SQL query is prepared and
+At runtime the templates get filled in with metadata (tables' and columns'
+names from the provided data structures) and WHERE clauses, written by you -
+the programmer in SQL. The rendered by [fasttemplate] SQL query is prepared and
 executed by [sqlx].
 
 In other words, package `rx` provides functions, interfaces and a generic data
-type [Rx], which wraps data structures, provided by you. [Rx] implements the
-provided interfaces to work easily with sets of database records. The
-relations' constraints are left to be managed by the database.
+type [Rx], which wraps data structures. The structs may be provided by you or
+generated from existing tables by [Generate]. [Rx] implements the provided
+interfaces to execute CRUD operations. The relations' constraints are left to
+be managed by the database.
 
-To ease the programmer's work with the database, `rx` provides two functions -
-[Migrate] and [Generate]. The first executes sets of SQL statements from a file
-to migrate the the database schema to a new state and the second re-generates
-the structs, mappped to rows in tables.
+To ease schema migrations, `rx` provides two functions - [Migrate] and
+[Generate]. The first executes sets of SQL statements from a file to migrate
+the the database schema to a new state and the second re-generates the structs,
+mappped to rows in tables.
 
 By default the current implementation assumes that the primary key name is
 `ID`. Of course the primary key can be more than one column and with arbitrary
-name. You can mark such fields with tags. See below.
+name. You can mark such fields with tags.
 
 # Synopsis
 
+	// Have an existing or newly created database. Generate a moddel package
+	// from it using the built-in commandline tool `rowx`.
+	cd to/your/project/root
+	// make a directory for your package, named for example "model"
+	mkdir -p internal/example/model
+	// Generate structures from all tables in the database, implementing
+	// SqlxMeta interface.
+	rowx generate -dsn /some/path/test.sqlite -package ./internal/example/model
+
+	// Use the structures elsewhere in your code.
+	// ...
+	// Have a structure, mapping a table row, generated in
+	// ./internal/example/model/model_tables.go.
 	type Users struct {
-		ID        int32
 		LoginName string
 		// ...
+		ID        int32
 	}
 
+	// Have a slice of Users to Insert.
 	var users = []Users{
 		Users{LoginName: "first"},
 		Users{LoginName: "the_second"},
 		Users{LoginName: "the_third"},
 	}
 
+	// Insert them.
 	r, e := rx.NewRx(users).Insert()
 	if e != nil {
 		fmt.Fprintf(os.Stderr, "Got error from m.Insert(): %s", e.Error())
 		return
 	}
-	//...
+	//... time passes
+
+	// Create new migration file or add to an existing one a new set of SQL
+	// statements to migrate the database to a new state.
+	cd to/your/project/root
+	vim data/migrations_01.sql
+	// Migrate.
+	./rowx migrate -sql_file data/migrations_01.sql -dsn=/tmp/test.sqlite -direction=up
+	// Run generate again to reflect the changes in the schema.
+	rowx generate -dsn /some/path/test.sqlite -package ./internal/example/model
+	// Edit your code, which uses the structures, if needed.
+	// ...and so the life of the application continues further on.
 
 [sqlx]: https://github.com/jmoiron/sqlx
+[fasttemplate]: https://github.com/valyala/fasttemplate
 */
 package rx
 
@@ -76,6 +104,8 @@ const (
 var (
 	// DefaultLogHeader is a template for rx logging.
 	DefaultLogHeader = `${prefix}:${level}:${short_file}:${line}`
+	// DefaultLogOutput is where the output from the Logger will go to.
+	DefaultLogOutput = os.Stderr
 	// DSN must be set before using DB() function. It is set by default to
 	// `:memory:`, because the default DriverName = `sqlite3`. See also options
 	// for the connection string when using sqlite3:
@@ -96,18 +126,22 @@ var (
 
 func newLogger() (l *log.Logger) {
 	l = log.New(ReflectXTag)
-	l.SetOutput(os.Stderr)
+	l.SetOutput(DefaultLogOutput)
 	l.SetHeader(DefaultLogHeader)
 	l.SetLevel(log.DEBUG)
 	return
 }
 
 /*
-DB invokes [sqlx.MustConnect] and sets the [sqlx.MapperFunc]. [sqlx.DB] is a
-wrapper around [sql.DB]. A DB instance is not a connection, but an abstraction
-representing a Database. This is why creating a *sqlx.DB does not return an
-error and will not panic. It maintains a connection pool internally, and will
-attempt to connect when a connection is first needed.
+DB invokes [sqlx.MustConnect] and assigns the returned [sqlx.DB] pointer to a
+private package variable, if not assigned already. This private variable is
+simply returned on subsequent calls. Then DB sets the [sqlx.DB.Mapper], using
+[ReflectXTag], and [CamelToSnake] as parameters to [reflectx.NewMapperFunc].
+
+[sqlx.DB] is a wrapper around [sql.DB]. A DB instance is not a connection, but
+an abstraction representing a Database. This is why creating a *sqlx.DB does
+not return an error and will not panic. It maintains a connection pool
+internally, and will attempt to connect when a connection is first needed.
 */
 func DB() *sqlx.DB {
 	if singleDB != nil {
@@ -136,12 +170,11 @@ func ResetDB() {
 
 /*
 Rx implements the [SqlxModel] interface and can be used right away or
-embedded (extended) to customise its behavior for your own needs. For example
-you may want to constraint the set of types that can be used with it, by
-providing an interface constraint instead of [Rowx].
+embedded (extended) to override some methods for a struct or set of structs.
 */
 type Rx[R Rowx] struct {
-	// An instance of R which implements the SqlxMeta interface (at least partially).
+	// An instance of R which may implement the SqlxMeta interface (even only
+	// partially).
 	r *R
 	/*
 		data is a slice of rows, retrieved from the database or to be inserted,
@@ -165,7 +198,7 @@ var (
 /*
 NewRx returns a new instance of a table model with optionally provided data
 rows as a variadic parameter. Providing the specific type parameter to
-instantiate is mandatory if it cannot be inferred from the variadic parameter.
+instantiate is mandatory if a variadic parameter is not passed.
 */
 func NewRx[R Rowx](rows ...R) SqlxModel[R] {
 	r := nilRowx[R]()
@@ -197,13 +230,17 @@ func nilRowx[R Rowx]() *R {
 fieldsMap returns a pointer to an instantiated and cached [reflectx.StructMap]
 for the generic structure. It is used to scan the tags of the fields and get
 column names and tag options.
+
+We implemented Migrate and Generate but still it worths it to consider carefully!:
+https://stackoverflow.com/questions/55934210/creating-structs-programmatically-at-runtime-possible
+https://agirlamonggeeks.com/golang-dynamic-lly-generate-struct/
 */
 func fieldsMap[R Rowx]() *reflectx.StructMap {
 	return DB().Mapper.TypeMap(reflect.ValueOf(nilRowx[R]()).Type())
 }
 
 /*
-Table returns the converted to snake case name of the type to be used as table
+Table returns the converted to snake_case name of the type to be used as table
 name in sql queries. If the underlying type implements the method Table from
 [SqlxMeta], the type is instantiated (if not already) and the method is called.
 */
@@ -213,9 +250,9 @@ func (m *Rx[R]) Table() string {
 	}
 	/*
 		An implementing (at least partially) SqlxMeta type and not implementing
-		SqlxModel (== embeds Rx), because if the underlying structure embeds Rx, we
-		end up with stackoverflow (because each next call enters this if,
-		causing endelss recursion).
+		SqlxModel (Rowx(m.r).(SqlxModel[R]) == embeds Rx), because if the
+		underlying structure embeds Rx, we end up with stackoverflow (because
+		each next call enters this if, causing endelss recursion).
 	*/
 	if _, ok := Rowx(m.r).(SqlxModel[R]); !ok {
 		if _, ok = Rowx(m.r).(interface{ Table() string }); ok {
@@ -240,7 +277,8 @@ func (m *Rx[R]) Data() []R {
 }
 
 /*
-SetData sets a slice of R to be inserted or updated in the database.
+SetData sets a slice of R to be inserted or updated in the database. Returns
+the current instance of [Rx].
 */
 func (m *Rx[R]) SetData(data []R) SqlxModel[R] {
 	m.data = data
@@ -296,38 +334,6 @@ func (m *Rx[R]) Columns() []string {
 
 	return m.columns
 }
-
-/*
-   TODO: Some day... use go:generate to move such (looping trough field tags)
-   code to compile time for
-   Rowx implementing types. Consider also a solution to (eventually
-   gradually) regenerate Rx embedding types and recompile the
-   application due to changes in the database schema. This is how we can
-   implement database migrations starting from the database.  1. During
-   development the owner of the user code changes the development database
-   and runs `go generate && go build -ldflags "-s -w" ./...` to
-   (re-)generate types which may need to embed Rx. Then recompiles the
-   application.
-   2. Next he/she prepares the sql migration file to be run on the
-   production database. It should not be harmfull if some defined fields in
-   the Rowx embedding types do not have corresponding columns in the
-   database, because they will have sane defaults, thanks to Go default
-   values. Also it will not harm if there are new columns in tables and
-   some types do not have yet the corresponding field. The only problematic
-   case is when a column in the database changes its type or a table is
-   dropped. To cover this case...
-	3. Deployment.
-	   a. Dabase migration trough executing the prepared SQL file.
-	   b. Disallow requests by showing a static page(Maintenance time -
-	   this should take less than a second).
-	   b. Immediately deploy the static binary. If it is a CGI application,
-	   on the next request the updated binary will run. If it is a running
-	   application (a (web-)service), immediately restart the application.
-
-   Consider carefully!:
-   https://stackoverflow.com/questions/55934210/creating-structs-programmatically-at-runtime-possible
-   https://agirlamonggeeks.com/golang-dynamic-lly-generate-struct/
-*/
 
 /*
 Insert inserts a slice of Rowx instances (without their primary key values) and

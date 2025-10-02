@@ -89,18 +89,22 @@ var cases = []struct {
 		output: "No such log_level: UNKNOWN.\n",
 	},
 	{
-		args:   []string{`generate`, `-dsn`, tempDBFile, `-package`, `rx/testdata/example/model`},
+		args:   []string{`generate`, `-dsn`, tempDBFile, `-package`, `rx/` + os.Getenv("EXAMPLE_MODEL")},
 		code:   0,
 		output: "_tables.go...",
 		setup: func(t *testing.T) {
-			err := os.MkdirAll(`rx/testdata/example/model`, 0750)
+			err := os.MkdirAll(`rx/`+os.Getenv("EXAMPLE_MODEL"), 0750)
 			require.NoErrorf(t, err, `Unexpected error: %+v`, err)
 		},
 	},
 	{
-		args:   []string{`generate`, `-dsn`, tempDBFile, `-package`, `example/model`},
+		args:   []string{`generate`, `-dsn`, tempDBFile, `-package`, os.Getenv("EXAMPLE_MODEL")},
 		code:   2,
 		output: "The directory must exist already!",
+		setup: func(t *testing.T) {
+			err := os.RemoveAll(packagePath)
+			require.NoErrorf(t, err, `Unexpected error: %+v`, err)
+		},
 	},
 	{
 		args:   []string{`alabalanica`},

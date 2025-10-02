@@ -652,8 +652,10 @@ func TestMigrate_up(t *testing.T) {
 func TestGenerate_no_such(t *testing.T) {
 	reQ := require.New(t)
 	packagePath := os.Getenv("EXAMPLE_MODEL")
+	err := os.RemoveAll(packagePath)
+	reQ.NoErrorf(err, `Unexpected error: %+v`, err)
 	t.Logf("Will generate model in '%s', but will get error as the path does not exist yet.", packagePath)
-	err := rx.Generate(rx.DSN, packagePath)
+	err = rx.Generate(rx.DSN, packagePath)
 	reQ.ErrorContains(err, `no such file or directory`)
 }
 
@@ -693,7 +695,7 @@ func TestGenerate_example_model(t *testing.T) {
 	_ = os.Chmod(packagePath, 0300) //nolint:gosec // G302
 	err = rx.Generate(rx.DSN, packagePath)
 	t.Logf("%v", err)
-	reQ.ErrorContains(err, `rx/example/model: permission denied`)
+	reQ.ErrorContains(err, packagePath+`: permission denied`)
 	_ = os.Chmod(packagePath, 0750) //nolint:gosec // G302
 }
 
