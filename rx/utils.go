@@ -106,6 +106,8 @@ func isCommonInitialism(word string) (string, bool) {
 		`udp`, `ui`, `uid`, `uuid`, `uri`, `url`, `utf8`, `vm`, `xml`, `xmpp`,
 		`xsrf`, `xss`, `pid`:
 		return strings.ToUpper(word), true
+	case `oauth`:
+		return `OAuth`, true
 	case `OAuth`:
 		return word, true
 	default:
@@ -120,8 +122,10 @@ const (
 	down
 )
 
+var updown = [...]string{`up`, `down`}
+
 func (d dir) String() string {
-	return [...]string{`up`, `down`}[d]
+	return updown[d]
 }
 
 /*
@@ -179,15 +183,11 @@ func Migrate(filePath, dsn, direction string) error {
 		if _, err = NewRx(Migrations{
 			Version:   v.Version,
 			Direction: v.Direction,
-			FilePath:  filePath,
-		}).Insert(); err != nil {
+			FilePath:  filePath}).Insert(); err != nil {
 			return err
 		}
 	}
-	if err != nil {
-		return err
-	}
-	return nil
+	return err
 }
 
 func substr(str string, lenChars int) string {
@@ -338,7 +338,8 @@ func Generate(dsn string, packagePath string) error {
 	sep := string(os.PathSeparator)
 	path := strings.Split(dirName, sep)
 	packageName := path[len(path)-1]
-	structsFileName := dirName + sep + packageName + "_structs.go"
+	// TODO: Generate also a file for views.
+	tablesFileName := dirName + sep + packageName + "_tables.go"
 	// Now we will know if we are ran for the first time for this directory or not.
 	files, _ := dh.ReadDir(0)
 	regenerated := false
@@ -350,8 +351,8 @@ func Generate(dsn string, packagePath string) error {
 			rePrefix = `re-`
 		}
 	}
-	Logger.Infof(`%sgenerating %s...`, rePrefix, structsFileName)
-	if err = os.WriteFile(structsFileName, []byte(structsFileString.String()), 0600); err != nil {
+	Logger.Infof(`%sgenerating %s...`, rePrefix, tablesFileName)
+	if err = os.WriteFile(tablesFileName, []byte(structsFileString.String()), 0600); err != nil {
 		return fmt.Errorf("os.WriteFile: %w", err)
 	}
 	if !regenerated {
@@ -414,23 +415,25 @@ func preparePackageHeaderForGeneratedStructs(packagePath string, fileString *str
 
 var structTemplate = `
 
-// New${TableName} is a constructor for [${TableName}].
-var New${TableName} = rx.NewRx[${TableName}]
+// New${TableName} is a constructor for rx.SqlxModel[${TableName}].
+func New${TableName}(rows...${TableName}) rx.SqlxModel[${TableName}] {
+	return rx.NewRx[${TableName}](rows...)
+}
 
 var _ rx.SqlxModel[${TableName}] = New${TableName}()
 
-// ${TableName} is an object, mapped to ${table_name}. It implements the
+// ${TableName} is an object, mapped to table ${table_name}. It implements the
 // SqlxMeta interface. 
 type ${TableName} struct {
 ${fields}
 }
 
-// Table returns ${table_name} for ${TableName}.
+// Table returns the table name ${table_name} for ${TableName}.
 func (u *${TableName}) Table() string {
 	return "${table_name}" 
 }
 
-// Columns returns a slice with column_names for ${TableName}.
+// Columns returns a slice, containing column names for ${TableName}.
 func (u *${TableName}) Columns() []string {
 	return []string{${column_names}
 	}
