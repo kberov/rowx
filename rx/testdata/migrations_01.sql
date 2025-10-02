@@ -316,7 +316,7 @@ DROP TRIGGER IF EXISTS stranici_bu;
 DROP TRIGGER IF EXISTS celini_bu;
 
 
--- 202509172303 up
+-- 202510022303 up
 CREATE TABLE other_types (
 -- This is a dummy table to just cover the cases for type generation for Go,
 -- found in rx/utils.go:sql2GoTypeAndTag
@@ -329,8 +329,13 @@ big BIGINT NOT NULL DEFAULT 0,
 byte BYTEA NOT NULL DEFAULT 0x00,
 float4 FLOAT4 NOT NULL DEFAULT 0.0,
 deci DECIMAL NOT NULL DEFAULT 0.000,
-unkn UNKNOWN NOT NULL DEFAULT 0
+unkn UNKNOWN NOT NULL DEFAULT 0,
+OAuth VARCHAR NOT NULL DEFAULT ''
+);
+CREATE TABLE oauth(
+OAuth VARCHAR NOT NULL DEFAULT ''
 );
 
--- 202509172303 down
+-- 202510022303 down
 DROP TABLE IF EXISTS other_types;
+DROP TABLE IF EXISTS oauth;

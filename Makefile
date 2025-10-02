@@ -1,4 +1,4 @@
-EXAMPLE=./example
+EXAMPLE=example
 export EXAMPLE_MODEL=${EXAMPLE}/model
 SRC=$(find . -name "*.go")
 BASE_PACKAGE := github.com/kberov/rowx
@@ -23,7 +23,7 @@ lint:
 
 test: install_deps clean
 	$(info ******************** running tests ********************)
-	go test -failfast -v  ./ ./... -coverprofile=coverage.html
+	go test -failfast -v ./... ./ -coverprofile=coverage.html
 	# test if the produced EXAMPLE_MODEL compiles too
 	go build ./...
 	go tool cover -html=coverage.html
@@ -33,10 +33,8 @@ install_deps:
 	go get -v ./...
 
 clean:
-	rm -rf rx/$(EXAMPLE)
-	rm -rf rx/testdata/$(EXAMPLE)
-	rm -rfv *.sqlite
-	rm -rfv */**/*.sqlite
+	rm -rfv $$(find . -type d -name "$$EXAMPLE")
+	rm -rfv $$(find . -name "*.sqlite")
 	rm -rfv rowx
 
 update_deps:
