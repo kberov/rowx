@@ -4,7 +4,11 @@
 // Copyright (c) 2025 Красимир Беров
 package main
 
-import "os"
+import (
+	"os"
+
+	"github.com/kberov/rowx/rx"
+)
 
 func init() {
 	output = os.Stderr
@@ -12,5 +16,9 @@ func init() {
 }
 
 func main() {
-	os.Exit(run())
+	i := run()
+	if e := rx.DB().Close(); e != nil {
+		rx.Logger.Errorf("%w", e)
+	}
+	os.Exit(i)
 }

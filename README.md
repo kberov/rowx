@@ -26,7 +26,7 @@ name. You can mark such fields with tags. See below.
 # Synopsis
 
 ```bash
-	# Have an existing or newly created database. Generate a moddel package
+	# Have an existing or newly created database. Generate a model package
 	# from it using the built-in commandline tool `rowx`.
 	cd to/your/project/root
 	# make a directory for your package, named for example "model"

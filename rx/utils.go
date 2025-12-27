@@ -155,7 +155,7 @@ func Migrate(filePath, dsn, direction string) error {
 	}
 	/*
 		FIXME: dangerous!!! we assume here that DB() was not invoked yet and
-		Migrate is called from a main() function. What if it is a called from a
+		Migrate is called from a main() function. What if it is called from a
 		long-running process? We need another separate singleDB.
 	*/
 	DSN = dsn
@@ -308,7 +308,7 @@ func parseMigrationHeader(line string) (version, direction string) {
 /*
 Generate generates structures for tables, found in database, pointed to by
 `dsn` and dumps them to a given `packagePath` directory. Returns an error if
-unsuccesfull at any point of the execution. The name of the last directory in
+unsuccessful at any point of the execution. The name of the last directory in
 the path is used as package name. The directory must exist already.
 
 Two files are created. The first only declares the package and can be modified
@@ -401,6 +401,7 @@ import (
 // preparePackageHeaderForGeneratedStructs only iterates trough the rows to prepare the Rowx
 // constraint. It allso uses the last folder from packagePath for package name.
 // The produced string is added to fileString.
+// TODO: Import only used packages. Until then we use goimports to clean unused packages.
 func preparePackageHeaderForGeneratedStructs(packagePath string, fileString *strings.Builder) {
 	pathToPackage := strings.Split(packagePath, string(os.PathSeparator))
 	packageName := pathToPackage[len(pathToPackage)-1]
@@ -501,10 +502,10 @@ func sql2GoTypeAndTag(column columnInfo, fieldsSlice *[]fieldWithGoType) string 
 		goType = sql2IfNullableGoType(column, "int8")
 	case "smallint", "int2", "year":
 		goType = sql2IfNullableGoType(column, "int16")
-	case "integer", "int4",
+	case "int4",
 		"mediumint", "int": // MySQL
 		goType = sql2IfNullableGoType(column, "int32")
-	case "bigint", "int8":
+	case "integer", "bigint", "int8":
 		goType = sql2IfNullableGoType(column, "int64")
 	case "date",
 		"timestamp without time zone", "timestamp",
