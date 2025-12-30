@@ -2,6 +2,8 @@ package rx
 
 import (
 	"database/sql"
+
+	"github.com/jmoiron/sqlx"
 )
 
 /*
@@ -26,8 +28,8 @@ type SqlxModel[R Rowx] interface {
 	SqlxMeta[R]
 	SqlxSelector[R]
 	SqlxUpdater[R]
-	Tx() Ext
-	WithTx(querer Ext) SqlxModel[R]
+	Tx() *sqlx.Tx
+	WithTx(queryer *sqlx.Tx) SqlxModel[R]
 }
 
 /*

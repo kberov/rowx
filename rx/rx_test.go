@@ -70,6 +70,10 @@ type Users struct {
 	ID        int64 `rx:"id,auto"`
 }
 
+func NewUsers(u ...Users) rx.SqlxModel[Users] {
+	return rx.NewRx[Users](u...)
+}
+
 var users = []Users{
 	Users{LoginName: "first", ChangedBY: sql.NullInt64{0, false}, Passwword: `a`},
 	Users{LoginName: "the_second", ChangedBY: sql.NullInt64{1, true}, Passwword: `b`},
@@ -97,7 +101,7 @@ func multiExec(e sqlx.Execer, query string) {
 }
 
 func init() {
-	rx.Logger.SetLevel(log.DEBUG)
+	rx.Logger.SetLevel(log.WARN)
 	multiExec(rx.DB(), schema)
 }
 
@@ -1087,17 +1091,18 @@ func ExampleRx_WithTx() {
 	superID := superAdmin.ID
 	uname := `kberov`
 	pswd := `123qwerty!`
-	// This is how we begin a transaction!
+	// This is how we usually begin a transaction!
+	// We could have also started one automatically with tx := group.Tx().
 	group := rx.NewRx(Groups{Name: uname}).WithTx(rx.DB().MustBegin())
-	// The rollback will be ignored if the tx has been committed already.
-	defer func() { _ = group.Tx().(*sqlx.Tx).Rollback() }()
+	// The rollback will be ignored if tx has been committed already.
+	defer func() { _ = group.Tx().Rollback() }()
 	res, err := group.Insert()
 	if err != nil {
-		fmt.Println("Error:", err.Error())
+		fmt.Println("group.Insert() Error:", err.Error())
 	}
 	groupID, err := res.LastInsertId()
 	if err != nil {
-		fmt.Println("Error:", err.Error())
+		fmt.Println("group.LastInsertId Error:", err.Error())
 	}
 	passwd := hashPasswordWithSaltAndIterations(pswd, uname, groupID)
 	user := rx.NewRx(Users{
@@ -1123,8 +1128,8 @@ func ExampleRx_WithTx() {
 	if err != nil {
 		fmt.Println("UserGroup.Insert Error:", err.Error())
 	}
-	// Commit the transaction.
-	if err = group.Tx().(*sqlx.Tx).Commit(); err != nil {
+	// Commit the transaction. It is the same started with group.WithTx(...)
+	if err = user.Tx().Commit(); err != nil {
 		fmt.Println("Commit Error:", err.Error())
 	}
 	// Not using any transaction.
@@ -1145,4 +1150,31 @@ func hashPasswordWithSaltAndIterations(password, salt string, iterations int64) 
 		hash = hex.EncodeToString(hasher.Sum(nil))
 	}
 	return hash
+}
+
+//nolint:errcheck
+func ExampleRx_Tx() {
+	superAdmin := NewUsers()
+	tx := superAdmin.Tx() // A new transaction just begun.
+	defer func() { _ = tx.Rollback() }()
+	admin, _ := superAdmin.Get(`login_name='superadmin'`)
+	adminGroup := rx.NewRx(Groups{
+		Name:      `MoreAdmins`,
+		ChangedBy: sql.NullInt64{Int64: admin.ID, Valid: true}},
+	).WithTx(tx)
+	res, err := adminGroup.Insert()
+	if err != nil {
+		fmt.Println("adminGroup.Insert Error:", err.Error())
+		return
+	}
+	gID, _ := res.LastInsertId()
+	rx.NewRx(UserGroup{UserID: admin.ID, GroupID: gID}).WithTx(tx).Insert()
+	if err := tx.Commit(); err != nil {
+		fmt.Println(`tx.Commit Error`, err.Error())
+		return
+	}
+	gr, _ := rx.NewRx[Groups]().Get(`id=:id`, rx.Map{`id`: gID})
+	fmt.Printf(`new Group: %q`, gr.Name)
+	// Output:
+	// new Group: "MoreAdmins"
 }

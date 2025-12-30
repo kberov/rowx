@@ -169,7 +169,7 @@ func ResetDB() {
 	singleDB = nil
 }
 
-// Ext is a unified constraint for *sqlx.Tx and *sqlx.DB.
+// Ext is a generic constraint for *sqlx.Tx and *sqlx.DB.
 type Ext interface {
 	sqlx.Ext
 	PrepareNamed(query string) (*sqlx.NamedStmt, error)
@@ -208,17 +208,28 @@ func NewRx[R Rowx](rows ...R) SqlxModel[R] {
 	return &Rx[R]{data: rows, r: nilRowx[R]()}
 }
 
-// Tx returns an *sqlx.DB or *sqlx.Tx.
-func (m *Rx[R]) Tx() Ext {
+// tX returns an *sqlx.DB or *sqlx.tX.
+func (m *Rx[R]) tX() Ext {
 	if m.queryer != nil {
 		return m.queryer
 	}
 	return DB()
 }
 
+// Tx returns an *sqlx.Tx so you do not have to make type assertion when you
+// want to invoke *sqlx.Tx.Commit or *sqlx.Tx.Rollback. It creates a new one if
+// needed.
+func (m *Rx[R]) Tx() *sqlx.Tx {
+	if m.queryer != nil {
+		return m.queryer.(*sqlx.Tx)
+	}
+	m.queryer = DB().MustBegin()
+	return m.queryer.(*sqlx.Tx)
+}
+
 // WithTx allows you to set an [sqlx.Tx] to be shared among several objects
 // to execute several SQL statements in one transaction.
-func (m *Rx[R]) WithTx(queryer Ext) SqlxModel[R] {
+func (m *Rx[R]) WithTx(queryer *sqlx.Tx) SqlxModel[R] {
 	m.queryer = queryer
 	return m
 }
@@ -366,7 +377,7 @@ func (m *Rx[R]) Insert() (sql.Result, error) {
 	query := m.renderInsertQuery()
 	Logger.Debugf("Rendered query: %s", query)
 	Logger.Debugf("Inserting rows: %+v", m.Data())
-	return sqlx.NamedExec(m.Tx(), query, m.Data())
+	return sqlx.NamedExec(m.tX(), query, m.Data())
 }
 
 func (m *Rx[R]) renderInsertQuery() string {
@@ -426,7 +437,7 @@ func (m *Rx[R]) Select(where string, bindData any, limitAndOffset ...int) ([]R, 
 	if err != nil {
 		return nil, err
 	}
-	return m.data, sqlx.Select(m.Tx(), &m.data, q, args...)
+	return m.data, sqlx.Select(m.tX(), &m.data, q, args...)
 }
 
 func (m *Rx[R]) renderSelectTemplate(where string, limitAndOffset []int) string {
@@ -461,7 +472,7 @@ func (m *Rx[R]) Get(where string, bindData ...any) (*R, error) {
 		return nilRowx[R](), err
 	}
 	m.r = new(R)
-	return m.r, sqlx.Get(m.Tx(), m.r, q, args...)
+	return m.r, sqlx.Get(m.tX(), m.r, q, args...)
 }
 
 var isWhere = regexp.MustCompile(`(?i:^\s*?where\s)`)
@@ -529,7 +540,7 @@ func (m *Rx[R]) Update(fields []string, where string) (sql.Result, error) {
 	}
 	query := RenderSQLTemplate(`UPDATE`, stash)
 	Logger.Debugf("Rendered UPDATE query : %s;", query)
-	namedStmt, e := m.Tx().PrepareNamed(query)
+	namedStmt, e := m.tX().PrepareNamed(query)
 	if e != nil {
 		return nil, e
 	}
@@ -559,5 +570,5 @@ func (m *Rx[R]) Delete(where string, bindData any) (sql.Result, error) {
 	query := RenderSQLTemplate(`DELETE`, stash)
 	Logger.Debugf("Constructed DELETE query : %s", query)
 
-	return sqlx.NamedExec(m.Tx(), query, bindData)
+	return sqlx.NamedExec(m.tX(), query, bindData)
 }
