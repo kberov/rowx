@@ -3,6 +3,7 @@ package rx_test
 import (
 	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"regexp"
@@ -23,10 +24,11 @@ PRAGMA foreign_keys = OFF;
 CREATE TABLE users (
 id INTEGER PRIMARY KEY AUTOINCREMENT,
 login_name varchar(100) UNIQUE,
+password varchar(64) NOT NULL UNIQUE,
 group_id INTEGER DEFAULT NULL REFERENCES groups(id),
 changed_by INTEGER DEFAULT NULL REFERENCES users(id) ON DELETE SET DEFAULT);
 
-INSERT INTO users(id,group_id,changed_by,login_name) VALUES (0,0,0,'superadmin');
+INSERT INTO users(id,group_id,changed_by,login_name,password) VALUES (0,0,0,'superadmin','qwerty');
 
 CREATE TABLE groups (
 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -62,21 +64,22 @@ DROP TABLE IF EXISTS foo;
 
 type Users struct {
 	LoginName string
-	GroupID   sql.NullInt32
-	ChangedBY sql.NullInt32
-	ID        int32 `rx:"id,auto"`
+	Passwword string `rx:"password"`
+	GroupID   sql.NullInt64
+	ChangedBY sql.NullInt64
+	ID        int64 `rx:"id,auto"`
 }
 
 var users = []Users{
-	Users{LoginName: "first", ChangedBY: sql.NullInt32{0, false}},
-	Users{LoginName: "the_second", ChangedBY: sql.NullInt32{1, true}},
-	Users{LoginName: "the_third", ChangedBY: sql.NullInt32{1, true}},
+	Users{LoginName: "first", ChangedBY: sql.NullInt64{0, false}, Passwword: `a`},
+	Users{LoginName: "the_second", ChangedBY: sql.NullInt64{1, true}, Passwword: `b`},
+	Users{LoginName: "the_third", ChangedBY: sql.NullInt64{1, true}, Passwword: `c`},
 }
 
 type Groups struct {
 	Name      string
-	ChangedBy sql.NullInt32
-	ID        int32 `rx:"id,auto"`
+	ChangedBy sql.NullInt64
+	ID        int64 `rx:"id,auto"`
 }
 
 // Stollen from sqlx_test.go.
@@ -100,13 +103,13 @@ func init() {
 
 type UserGroup struct {
 	rx.Rx[UserGroup]
-	UserID  int32
-	GroupID int32
+	UserID  int64
+	GroupID int64
 	// Used only as bind parameters during UPDATE and maybe other queries. Must
 	// be a named struct, known at compile time!
 	Where whereParams `rx:"where,-"` // - : Do not treat this field as column.
 }
-type whereParams struct{ GroupID int32 }
+type whereParams struct{ GroupID int64 }
 
 // Note: the order of test matters, because they modify the same data and each
 // next test relies on the current state of the data.
@@ -144,6 +147,8 @@ func TestImplementsSqlxMeta(t *testing.T) {
 	t.Logf(`Instantiated: %#v`, m)
 }
 
+/*
+ */
 func TestTryEmbed(t *testing.T) {
 	reQ := require.New(t)
 	ug := new(UserGroup)
@@ -343,7 +348,7 @@ var testsForTestSelect = []struct {
 	errContains   string
 	bindData      map[string]any
 	lAndOff       []int
-	lastID        int32
+	lastID        int64
 	expectedError bool
 }{
 	{
@@ -444,7 +449,7 @@ var testsForTestUpdate = []struct {
 		where:       `id=:id`,
 		selectWhere: `id=:id`,
 		Rx: rx.NewRx(Users{LoginName: `first_updated`, ID: 1,
-			GroupID: sql.NullInt32{Valid: true, Int32: 0}}),
+			GroupID: sql.NullInt64{Valid: true, Int64: 0}}),
 		affected:   1,
 		columns:    []string{`Login_name`},
 		selectBind: map[string]any{`id`: 1},
@@ -457,7 +462,7 @@ var testsForTestUpdate = []struct {
 		selectWhere: `id IN(SELECT id FROM users WHERE ID>1)`,
 		Rx: rx.NewRx(
 			Users{LoginName: `second_updated`, ID: 2},
-			Users{LoginName: `third_updated`, ID: 3, GroupID: sql.NullInt32{Valid: true, Int32: 2}},
+			Users{LoginName: `third_updated`, ID: 3, GroupID: sql.NullInt64{Valid: true, Int64: 2}},
 		),
 		affected: 0,
 		columns:  []string{`LoginName`, `group_id`},
@@ -468,8 +473,8 @@ var testsForTestUpdate = []struct {
 		// this WHERE clause will NOT produce UNIQUE CONSTRAINT Error, because id is PRIMARY KEY.
 		where: `id = :id`,
 		Rx: rx.NewRx(
-			Users{LoginName: `second_updated_ok`, ID: 2, GroupID: sql.NullInt32{Valid: true, Int32: 2}},
-			Users{LoginName: `third_updated_ok`, ID: 3, GroupID: sql.NullInt32{Valid: true, Int32: 3}},
+			Users{LoginName: `second_updated_ok`, ID: 2, GroupID: sql.NullInt64{Valid: true, Int64: 2}},
+			Users{LoginName: `third_updated_ok`, ID: 3, GroupID: sql.NullInt64{Valid: true, Int64: 3}},
 		),
 		affected:    2,
 		columns:     []string{`login_name`, `GroupID`},
@@ -512,10 +517,10 @@ func TestUpdate(t *testing.T) {
 			}
 
 			if i == 1 {
-				groupID := tc.Rx.Data()[0].GroupID.Int32
-				if groupID != data[0].GroupID.Int32 {
+				groupID := tc.Rx.Data()[0].GroupID.Int64
+				if groupID != data[0].GroupID.Int64 {
 					t.Errorf("Expected group_id to be set to %#v! It was set to: %#v",
-						groupID, data[0].GroupID.Int32)
+						groupID, data[0].GroupID.Int64)
 				}
 			}
 			t.Logf("Updated records: %#v", data)
@@ -806,7 +811,7 @@ func Benchmark_regexpMatchWhere(b *testing.B) {
 }
 
 func Fuzz_containsWhere(f *testing.F) {
-	for _, v := range []string{aStr, `where i=1`, `    Where e>0`, `wheRe.Int32 `} {
+	for _, v := range []string{aStr, `where i=1`, `    Where e>0`, `wheRe.Int64 `} {
 		f.Add(v)
 	}
 	f.Fuzz(func(t *testing.T, in string) {
@@ -842,23 +847,23 @@ func ExampleNewRx_with_param() {
 func ExampleRx_Data() {
 	type Users struct {
 		LoginName string
-		GroupID   sql.NullInt32
-		ChangedBy sql.NullInt32
+		GroupID   sql.NullInt64
+		ChangedBy sql.NullInt64
 		ID        int32 `rx:"id,auto"`
 	}
 	// []Users to be inserted (or updated, (LoginName is UNIQUE)).
 	var users = []Users{
-		Users{LoginName: "first", ChangedBy: sql.NullInt32{1, true}},
-		Users{LoginName: "the_second", ChangedBy: sql.NullInt32{1, true}},
+		Users{LoginName: "first", ChangedBy: sql.NullInt64{1, true}},
+		Users{LoginName: "the_second", ChangedBy: sql.NullInt64{1, true}},
 	}
 	// Type parameter is guessed from the type of the parameters.
 	m := rx.NewRx(users...)
 	for _, u := range m.Data() {
-		fmt.Printf("User.LoginName: %s, User.ChangedBy.Int32: %d\n", u.LoginName, u.ChangedBy.Int32)
+		fmt.Printf("User.LoginName: %s, User.ChangedBy.Int64: %d\n", u.LoginName, u.ChangedBy.Int64)
 	}
 	// Output:
-	// User.LoginName: first, User.ChangedBy.Int32: 1
-	// User.LoginName: the_second, User.ChangedBy.Int32: 1
+	// User.LoginName: first, User.ChangedBy.Int64: 1
+	// User.LoginName: the_second, User.ChangedBy.Int64: 1
 }
 
 func ExampleRx_SetData() {
@@ -927,8 +932,8 @@ func ExampleRx_Insert() {
 	fmt.Printf("Inserted new group with id: %d\n", lastGroupID)
 
 	usrs := []Users{
-		Users{LoginName: `fourth`, GroupID: sql.NullInt32{Int32: 4, Valid: true}},
-		Users{LoginName: `fifth`, GroupID: sql.NullInt32{Int32: 5, Valid: true}},
+		Users{LoginName: `fourth`, GroupID: sql.NullInt64{Int64: 4, Valid: true}, Passwword: `qwe4`},
+		Users{LoginName: `fifth`, GroupID: sql.NullInt64{Int64: 5, Valid: true}, Passwword: `5th`},
 	}
 	r, err := rx.NewRx(usrs...).Insert()
 
@@ -1075,4 +1080,69 @@ func ExampleSqlxMeta() {
 	fmt.Printf("ID: %d, LoginName: %s", u.ID, u.LoginName)
 	// Output:
 	// ID: 1, LoginName: first
+}
+
+func ExampleRx_WithTx() {
+	superAdmin, _ := rx.NewRx[Users]().Get(`login_name='superadmin'`)
+	superID := superAdmin.ID
+	uname := `kberov`
+	pswd := `123qwerty!`
+	// This is how we begin a transaction!
+	group := rx.NewRx(Groups{Name: uname}).WithTx(rx.DB().MustBegin())
+	// The rollback will be ignored if the tx has been committed already.
+	defer func() { _ = group.Tx().(*sqlx.Tx).Rollback() }()
+	res, err := group.Insert()
+	if err != nil {
+		fmt.Println("Error:", err.Error())
+	}
+	groupID, err := res.LastInsertId()
+	if err != nil {
+		fmt.Println("Error:", err.Error())
+	}
+	passwd := hashPasswordWithSaltAndIterations(pswd, uname, groupID)
+	user := rx.NewRx(Users{
+		LoginName: `kberov`,
+		Passwword: passwd,
+		GroupID:   sql.NullInt64{groupID, true},
+		ChangedBY: sql.NullInt64{superID, true},
+		// Using the same transaction!
+	}).WithTx(group.Tx())
+	res, err = user.Insert()
+	if err != nil {
+		fmt.Println("user.Insert Error:", err.Error())
+	}
+	userID, err := res.LastInsertId()
+	if err != nil {
+		fmt.Println("user.LastInsertId Error:", err.Error())
+	}
+	res, err = rx.NewRx(UserGroup{
+		UserID:  userID,
+		GroupID: groupID,
+		// Using the same transaction!
+	}).WithTx(group.Tx()).Insert()
+	if err != nil {
+		fmt.Println("UserGroup.Insert Error:", err.Error())
+	}
+	// Commit the transaction.
+	if err = group.Tx().(*sqlx.Tx).Commit(); err != nil {
+		fmt.Println("Commit Error:", err.Error())
+	}
+	// Not using any transaction.
+	if kberov, err := rx.NewRx[Users]().Get(`login_name='kberov'`); err == nil {
+		fmt.Println(`Passwword:`, kberov.Passwword[:6])
+	} else {
+		fmt.Println("Users.Get Error:", err.Error())
+	}
+	// Output:
+	// Passwword: 7fc19e
+}
+
+func hashPasswordWithSaltAndIterations(password, salt string, iterations int64) string {
+	hash := salt + password
+	for range iterations {
+		hasher := sha256.New()
+		hasher.Write([]byte(hash))
+		hash = hex.EncodeToString(hasher.Sum(nil))
+	}
+	return hash
 }

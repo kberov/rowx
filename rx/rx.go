@@ -24,23 +24,23 @@ name. You can mark such fields with tags.
 
 # Synopsis
 
-	// Have an existing or newly created database. Generate a moddel package
-	// from it using the built-in commandline tool `rowx`.
+	// Have an existing or newly created database. Generate a model package
+	// from it using the companion commandline tool `rowx`.
 	cd to/your/project/root
 	// make a directory for your package, named for example "model"
 	mkdir -p internal/example/model
 	// Generate structures from all tables in the database, implementing
 	// SqlxMeta interface.
-	rowx generate -dsn /some/path/test.sqlite -package ./internal/example/model
+	rowx generate -dsn /some/path/mydb-development.sqlite -package ./internal/example/model
 
-	// Use the structures elsewhere in your code.
+	// Use the structures in your application.
 	// ...
 	// Have a structure, mapping a table row, generated in
 	// ./internal/example/model/model_tables.go.
 	type Users struct {
 		LoginName string
 		// ...
-		ID        int32
+		ID        int64
 	}
 
 	// Have a slice of Users to Insert.
@@ -58,15 +58,17 @@ name. You can mark such fields with tags.
 	}
 	//... time passes
 
-	// Create new migration file or add to an existing one a new set of SQL
+	// Create a new migration file or add to an existing one a new set of SQL
 	// statements to migrate the database to a new state.
 	cd to/your/project/root
 	vim data/migrations_01.sql
 	// Migrate.
 	./rowx migrate -sql_file data/migrations_01.sql -dsn=/tmp/test.sqlite -direction=up
 	// Run generate again to reflect the changes in the schema.
-	rowx generate -dsn /some/path/test.sqlite -package ./internal/example/model
+	rowx generate -dsn /some/path/mydb-development.sqlite -package ./internal/example/model
 	// Edit your code, which uses the structures, if needed.
+	// During deployment just run `rowx migrate` again on the production
+	// datatbase.
 	// ...and so the life of the application continues further on.
 
 [sqlx]: https://github.com/jmoiron/sqlx
@@ -82,7 +84,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/jmoiron/sqlx/reflectx"
@@ -168,6 +169,12 @@ func ResetDB() {
 	singleDB = nil
 }
 
+// Ext is a unified constraint for *sqlx.Tx and *sqlx.DB.
+type Ext interface {
+	sqlx.Ext
+	PrepareNamed(query string) (*sqlx.NamedStmt, error)
+}
+
 /*
 Rx implements the [SqlxModel] interface and can be used right away or
 embedded (extended) to override some methods for a struct or set of structs.
@@ -189,11 +196,8 @@ type Rx[R Rowx] struct {
 	table string
 	// columns of the table are populated upon first use of '.Columns()'.
 	columns []string
+	queryer Ext
 }
-
-var (
-	rxRegistry = new(sync.Map)
-)
 
 /*
 NewRx returns a new instance of a table model with optionally provided data
@@ -201,17 +205,21 @@ rows as a variadic parameter. Providing the specific type parameter to
 instantiate is mandatory if a variadic parameter is not passed.
 */
 func NewRx[R Rowx](rows ...R) SqlxModel[R] {
-	r := nilRowx[R]()
-	typestr := type2str(r)
-	if m, ok := rxRegistry.Load(typestr); ok {
-		// Does it implement SqlxModel[R]? Then use it as such.
-		if mr, ok := Rowx(m).(SqlxModel[R]); ok {
-			// just reset the data
-			return mr.SetData(rows)
-		}
+	return &Rx[R]{data: rows, r: nilRowx[R]()}
+}
+
+// Tx returns an *sqlx.DB or *sqlx.Tx.
+func (m *Rx[R]) Tx() Ext {
+	if m.queryer != nil {
+		return m.queryer
 	}
-	m := &Rx[R]{data: rows, r: r}
-	rxRegistry.Store(typestr, m)
+	return DB()
+}
+
+// WithTx allows you to set an [sqlx.Tx] to be shared among several objects
+// to execute several SQL statements in one transaction.
+func (m *Rx[R]) WithTx(queryer Ext) SqlxModel[R] {
+	m.queryer = queryer
 	return m
 }
 
@@ -358,7 +366,7 @@ func (m *Rx[R]) Insert() (sql.Result, error) {
 	query := m.renderInsertQuery()
 	Logger.Debugf("Rendered query: %s", query)
 	Logger.Debugf("Inserting rows: %+v", m.Data())
-	return DB().NamedExec(query, m.Data())
+	return sqlx.NamedExec(m.Tx(), query, m.Data())
 }
 
 func (m *Rx[R]) renderInsertQuery() string {
@@ -418,7 +426,7 @@ func (m *Rx[R]) Select(where string, bindData any, limitAndOffset ...int) ([]R, 
 	if err != nil {
 		return nil, err
 	}
-	return m.data, DB().Select(&m.data, q, args...)
+	return m.data, sqlx.Select(m.Tx(), &m.data, q, args...)
 }
 
 func (m *Rx[R]) renderSelectTemplate(where string, limitAndOffset []int) string {
@@ -453,7 +461,7 @@ func (m *Rx[R]) Get(where string, bindData ...any) (*R, error) {
 		return nilRowx[R](), err
 	}
 	m.r = new(R)
-	return m.r, DB().Get(m.r, q, args...)
+	return m.r, sqlx.Get(m.Tx(), m.r, q, args...)
 }
 
 var isWhere = regexp.MustCompile(`(?i:^\s*?where\s)`)
@@ -509,13 +517,9 @@ func (m *Rx[R]) Update(fields []string, where string) (sql.Result, error) {
 		Logger.Panic("Cannot update, when no data is provided!")
 	}
 	var (
-		tx *sqlx.Tx
-		r  sql.Result
-		e  error
+		r sql.Result
+		e error
 	)
-	tx = DB().MustBegin()
-	// The rollback will be ignored if the tx has been committed already.
-	defer func() { _ = tx.Rollback() }()
 
 	stash := map[string]any{
 		`table`: m.Table(),
@@ -525,7 +529,7 @@ func (m *Rx[R]) Update(fields []string, where string) (sql.Result, error) {
 	}
 	query := RenderSQLTemplate(`UPDATE`, stash)
 	Logger.Debugf("Rendered UPDATE query : %s;", query)
-	namedStmt, e := tx.PrepareNamed(query)
+	namedStmt, e := m.Tx().PrepareNamed(query)
 	if e != nil {
 		return nil, e
 	}
@@ -538,9 +542,6 @@ func (m *Rx[R]) Update(fields []string, where string) (sql.Result, error) {
 		}
 	}
 
-	if e = tx.Commit(); e != nil {
-		return nil, e
-	}
 	return r, e
 }
 
@@ -558,5 +559,5 @@ func (m *Rx[R]) Delete(where string, bindData any) (sql.Result, error) {
 	query := RenderSQLTemplate(`DELETE`, stash)
 	Logger.Debugf("Constructed DELETE query : %s", query)
 
-	return DB().NamedExec(query, bindData)
+	return sqlx.NamedExec(m.Tx(), query, bindData)
 }

@@ -1,6 +1,8 @@
 package rx
 
-import "database/sql"
+import (
+	"database/sql"
+)
 
 /*
 Rowx is an empty interface and generic constraint for database records.
@@ -16,14 +18,16 @@ Rx to get automatically its implementation and override some of its
 methods.
 */
 type SqlxModel[R Rowx] interface {
-	SqlxMeta[R]
 	Data() []R
 	SetData(data []R) (rx SqlxModel[R])
-	SqlxInserter[R]
+	SqlxDeleter[R]
 	SqlxGetter[R]
+	SqlxInserter[R]
+	SqlxMeta[R]
 	SqlxSelector[R]
 	SqlxUpdater[R]
-	SqlxDeleter[R]
+	Tx() Ext
+	WithTx(querer Ext) SqlxModel[R]
 }
 
 /*

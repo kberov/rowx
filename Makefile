@@ -34,7 +34,8 @@ install_deps:
 
 clean:
 	rm -rfv $$(find . -type d -name "$$EXAMPLE")
-	rm -rfv $$(find . -name "*.sqlite")
+	rm -rfv $$(find . -name "*.sqlit*")
+	rm -rfv $$(find /tmp -name "rowx_test*.sqlit*")
 	rm -rfv rowx
 
 update_deps:
