@@ -279,6 +279,7 @@ func (m *Rx[R]) Table() string {
 				Logger.Debugf("Instantiating %#v...", m.r)
 				m.r = new(R)
 			}
+			Logger.Debugf(`m: %#+v`, m)
 			m.table = Rowx(m.r).(interface{ Table() string }).Table()
 			return m.table
 		}
@@ -315,9 +316,9 @@ func (m *Rx[R]) Columns() []string {
 	}
 	/*
 		An implementing (at least partially) SqlxMeta type and not implementing
-		SqlxModel (== embeds Rx), because if the underlying structure embeds Rx, we
-		end up with stackoverflow (because each next call enters this if,
-		causing endelss recursion).
+		SqlxModel (== embeds Rx), because if the underlying structure embeds
+		Rx, we end up with stackoverflow (because each next call enters this
+		"if" statement, causing endelss recursion).
 	*/
 	if _, ok := Rowx(m.r).(SqlxModel[R]); !ok {
 		if _, ok = Rowx(m.r).(interface{ Columns() []string }); ok {
@@ -384,13 +385,27 @@ func (m *Rx[R]) renderInsertQuery() string {
 	// TODO: Think of caching noAutoColumns (and use go:generate for all metadata)
 	noAutoColumns := make([]string, 0, len(m.Columns())-1)
 	names := fieldsMap[R]().Names
+
 	for _, col := range m.Columns() {
+		colObj, exists := names[col]
+		// if this col does not exist in the names fieldsMap,this will mean,
+		// that CamelToSnake and SnakeToCamel contradict for this very case.
+		// Quick-fix: 1. If possible, change the sql table column name and
+		// rerun the migration to generate correspond field for the structure.
+		// or modify the struct field accordingly, or add a tag to the struct
+		// field.
+		if !exists {
+			Logger.Warnf(`column %s not found in fieldsMap. This may lead to panic!`, col)
+			noAutoColumns = append(noAutoColumns, col)
+			continue
+		}
+
 		// insert column named ID but with tag option no_auto: `rx:"id,no_auto"`
-		if _, isNoAuto := names[col].Options[`no_auto`]; col == `id` && isNoAuto {
+		if _, isNoAuto := colObj.Options[`no_auto`]; col == `id` && isNoAuto {
 			continue
 		}
 		// do not insert collumns with tag `auto`
-		if _, ok := names[col].Options[`auto`]; ok {
+		if _, ok := colObj.Options[`auto`]; ok {
 			continue
 		}
 		noAutoColumns = append(noAutoColumns, col)
