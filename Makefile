@@ -21,7 +21,7 @@ lint:
 	$(info ******************** running lint tools ********************)
 	golangci-lint run --config ./.golangci.yaml # -v
 
-test: install_deps clean
+test: clean install_deps
 	$(info ******************** running tests ********************)
 	go test -failfast -v ./... ./ -coverprofile=coverage.html
 	# test if the produced EXAMPLE_MODEL compiles too

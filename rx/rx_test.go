@@ -1,3 +1,4 @@
+//nolint:all
 package rx_test
 
 import (
@@ -6,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -664,7 +666,7 @@ func TestGenerate_no_such(t *testing.T) {
 	err := os.RemoveAll(packagePath)
 	reQ.NoErrorf(err, `Unexpected error: %+v`, err)
 	t.Logf("Will generate model in '%s', but will get error as the path does not exist yet.", packagePath)
-	err = rx.Generate(rx.DSN, packagePath)
+	err = rx.Generate(rx.DSN, packagePath, ``)
 	reQ.ErrorContains(err, `no such file or directory`)
 }
 
@@ -674,7 +676,7 @@ func TestGenerate_example_model(t *testing.T) {
 	t.Logf("Will generate model in '%s' after creating it.", packagePath)
 	err := os.MkdirAll(packagePath, 0750)
 	reQ.NoErrorf(err, `Unexpected error: %+v`, err)
-	err = rx.Generate(rx.DSN, packagePath)
+	err = rx.Generate(rx.DSN, packagePath, ``)
 	reQ.NoErrorf(err, `Unexpected error during rx.Generate: %+v`, err)
 
 	// now produce error while opening file for writing
@@ -682,30 +684,41 @@ func TestGenerate_example_model(t *testing.T) {
 	if err != nil {
 		t.Errorf("os.Chmod: %s", err.Error())
 	}
-	err = rx.Generate(rx.DSN, packagePath)
+	err = rx.Generate(rx.DSN, packagePath, ``)
 	t.Logf("%v", err)
 	reQ.ErrorContains(err, `model_tables.go`)
 	reQ.ErrorContains(err, `permission denied`)
 
 	// now produce `regenerated == true` to cover this case
 	_ = os.Chmod(packagePath+`/model_tables.go`, 0600)
-	err = rx.Generate(rx.DSN, packagePath)
+	err = rx.Generate(rx.DSN, packagePath, ``)
 	reQ.NoErrorf(err, `Unexpected error during rx.Generate: %+v`, err)
 
 	// now produce err from DB().Select
 	selectTBI := rx.QueryTemplates[`SELECT_TABLE_INFO_sqlite3`]
 	rx.QueryTemplates[`SELECT_TABLE_INFO_sqlite3`] = `select * from blabla`
-	err = rx.Generate(rx.DSN, packagePath)
+	err = rx.Generate(rx.DSN, packagePath, ``)
 	t.Logf("%v", err)
 	reQ.ErrorContains(err, `no such table: blabla`)
 	rx.QueryTemplates[`SELECT_TABLE_INFO_sqlite3`] = selectTBI
 
 	// now produce error for reading directory - should never happen!
 	_ = os.Chmod(packagePath, 0300) //nolint:gosec // G302
-	err = rx.Generate(rx.DSN, packagePath)
+	err = rx.Generate(rx.DSN, packagePath, ``)
 	t.Logf("%v", err)
 	reQ.ErrorContains(err, packagePath+`: permission denied`)
-	_ = os.Chmod(packagePath, 0750) //nolint:gosec // G302
+	_ = os.Chmod(packagePath, 0750)
+}
+
+func TestGenerate_some_tables_only(t *testing.T) {
+
+	reQ := require.New(t)
+	packagePath := filepath.Join(os.Getenv("EXAMPLE_MODEL"), `sometablesonly`)
+	t.Logf("Will generate model in '%s' after creating it.", packagePath)
+	err := os.MkdirAll(packagePath, 0750)
+	reQ.NoErrorf(err, `Unexpected error: %+v`, err)
+	err = rx.Generate(rx.DSN, packagePath, "\nusers,	user_group ,\v groups\n\t\v")
+	reQ.NoErrorf(err, `Unexpected error during rx.Generate: %+v`, err)
 }
 
 func TestMigrate_down(t *testing.T) {
@@ -765,7 +778,7 @@ func TestPanics(t *testing.T) {
 		{
 			name: `Generate_unsafe_path`,
 			fn: func() {
-				_ = rx.Generate(rx.DSN, `../../../example/model`)
+				_ = rx.Generate(rx.DSN, `../../../example/model`, ``)
 			},
 		},
 	}

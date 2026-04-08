@@ -22,6 +22,7 @@ var (
 	dsn, sqlFilePath    string
 	direction, logLevel string
 	packagePath, action string
+	tables2structs      string
 	output              io.Writer
 	logLevels           = map[string]log.Lvl{"DEBUG": 1, "INFO": 2, "WARN": 3, "ERROR": 4, "OFF": 5}
 )
@@ -51,7 +52,9 @@ func _init() {
 	mdsn := mFlags.Lookup(`dsn`)
 	gFlags.StringVar(&dsn, mdsn.Name, mdsn.DefValue, mdsn.Usage)
 	gFlags.StringVar(&packagePath, `package`, ``, "Path to package to generate."+
-		" Last folder is the name of\n           the package to be generated.")
+		" Last folder is the name of\n             the package to be generated.")
+	gFlags.StringVar(&tables2structs, `tables`, tables2structs, `Comma-separated list of table-names
+             for which to generate structs.`)
 	mLogLevel := mFlags.Lookup(`log_level`)
 	gFlags.StringVar(&logLevel, mLogLevel.Name, mLogLevel.DefValue, mLogLevel.Usage)
 	gFlags.Usage = func() {
@@ -60,6 +63,7 @@ func _init() {
 			`package_help`: gFlags.Lookup(`package`).Usage,
 			`gdsn_help`:    gFlags.Lookup(`dsn`).Usage,
 			`ll_help`:      gFlags.Lookup(`log_level`).Usage,
+			`tables_help`:  gFlags.Lookup(`tables`).Usage,
 		})
 	}
 }
@@ -81,9 +85,10 @@ ${generate}
   -log_level ${ll_help}
 `
 	generateTmpl = `  ${generate}
-  -dsn     ${gdsn_help}
-  -package ${package_help}
+  -dsn       ${gdsn_help}
+  -package   ${package_help}
   -log_level ${ll_help}
+  -tables    ${tables_help}
 `
 )
 
@@ -112,6 +117,7 @@ func usage() {
 		`package_help`: gFlags.Lookup(`package`).Usage,
 		`gdsn_help`:    gFlags.Lookup(`dsn`).Usage,
 		`ll_help`:      gFlags.Lookup(`log_level`).Usage,
+		`tables_help`:  gFlags.Lookup(`tables`).Usage,
 	})
 	say(usageTmpl, output, rx.Map{
 		`exe`:    os.Args[0],
@@ -186,7 +192,7 @@ func runGenerate() int {
 		gFlags.Usage()
 		return 1
 	}
-	if eh = rx.Generate(dsn, packagePath); eh != nil {
+	if eh = rx.Generate(dsn, packagePath, tables2structs); eh != nil {
 		rx.Logger.Errorf("\n=====\n%s!", eh.Error())
 		return 2
 	}
