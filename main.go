@@ -18,7 +18,7 @@ func init() {
 func main() {
 	i := run()
 	if e := rx.DB().Close(); e != nil {
-		rx.Logger.Errorf("%w", e)
+		rx.Logger.Errorf("%s", e.Error())
 	}
 	os.Exit(i)
 }

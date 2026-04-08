@@ -40,7 +40,11 @@ c.type as c_type, c."notnull" as not_null, c.dflt_value as default_value, c.pk a
 -- TODO: Parse CHECK constraints(and later maybe foreign keys) from t.sql
 -- , t.sql
 FROM sqlite_master t, pragma_table_info(t.name) c
-WHERE (t.type='table' AND t.name NOT LIKE 'sqlite%' AND t.name !=?) ORDER BY table_name, c_id;
+WHERE (
+	-- We replace the ${and_t_name_in} with an IN clause with comma separated
+	-- list of table names for which structures will be generated in Go.
+	t.type='table' AND t.name NOT LIKE 'sqlite%' ${and_t_name_in} AND t.name !=?)
+ORDER BY table_name, c_id;
 `,
 	}
 	replace = fasttemplate.ExecuteStringStd

@@ -286,13 +286,13 @@ func parseMigrationFile(filePath string) (migrations []migration, err error) {
 }
 
 func safeOpen(filePath string) (*os.File, error) {
-	filePath, _ = filepath.Abs(filepath.Clean(filePath))
+	filePath, _ = filepath.Abs(filePath)
 	cwd, _ := os.Getwd()
 	if !strings.HasPrefix(filePath, cwd) {
 		Logger.Panicf(`%s is unsafe. Cannot continue...`, filePath)
 	}
 	// Logger.Debugf(`Opening a safe path %s`, filePath)
-	return os.Open(filePath)
+	return os.Open(filePath) //nolint:gosec // Abs calls Clean on result.
 }
 
 var migrationHeader = regexp.MustCompile(`^--\s*(\d{1,12})\s*(up|down)$`)
@@ -311,22 +311,26 @@ Generate generates structures for tables, found in database, pointed to by
 unsuccessful at any point of the execution. The name of the last directory in
 the path is used as package name. The directory must exist already.
 
+`tables` is expected to contain comma-separated tablenames, for which
+structures will be generated. If `tables` is an empty string, structures for
+all tables in the database are generated.
+
 Two files are created. The first only declares the package and can be modified
 by the programmer. It will not be regenerated on subsequent runs. The second
 contains all the structures, mapped to tables. It will be regenerated again on
-the next run of this function to map the potentially migrated to a new state
+the next run of this function to re-map the potentially migrated to a new state
 schema to Go structs.
 */
-func Generate(dsn string, packagePath string) error {
+func Generate(dsn string, packagePath string, tables string) error {
 	DSN = dsn
 	dh, err := safeOpen(packagePath)
 	if err != nil {
 		return fmt.Errorf("%w. The directory must exist already", err)
 	}
 	defer dh.Close()
-	sql := QueryTemplates[`SELECT_TABLE_INFO_sqlite3`].(string)
-	info := []columnInfo{}
-	if err = DB().Select(&info, sql, MigrationsTable); err != nil {
+
+	info, err := collectTableColumnInfo(tables)
+	if err != nil {
 		return err
 	}
 	var structsFileString strings.Builder
@@ -362,6 +366,24 @@ func Generate(dsn string, packagePath string) error {
 		return os.WriteFile(modelFileName, []byte(modelAsString), 0600)
 	}
 	return err
+}
+
+func collectTableColumnInfo(tables string) (info []columnInfo, err error) {
+	tNames := strings.Split(tables, `,`)
+	for i, tName := range tNames {
+		tNames[i] = `'` + strings.TrimSpace(tName) + `'`
+	}
+	sql := QueryTemplates[`SELECT_TABLE_INFO_sqlite3`].(string)
+	var andTnameIn = ``
+	if tables != `` {
+		andTnameIn = ` AND t.name IN(` + strings.Join(tNames, `,`) + `)`
+	}
+	sql = replace(sql, `${`, `}`, map[string]any{`and_t_name_in`: andTnameIn})
+	info = []columnInfo{}
+	if err = DB().Select(&info, sql, MigrationsTable); err != nil {
+		return info, err
+	}
+	return info, err
 }
 
 var modelHeader = `// Package ${package} contains structs mapped to tables, produced from
