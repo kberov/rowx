@@ -271,7 +271,7 @@ func (m *Rx[R]) Table() string {
 		An implementing (at least partially) SqlxMeta type and not implementing
 		SqlxModel (Rowx(m.r).(SqlxModel[R]) == embeds Rx), because if the
 		underlying structure embeds Rx, we end up with stackoverflow (because
-		each next call enters this if, causing endelss recursion).
+		each next call enters into this if statement, causing endelss recursion).
 	*/
 	if _, ok := Rowx(m.r).(SqlxModel[R]); !ok {
 		if _, ok = Rowx(m.r).(interface{ Table() string }); ok {
@@ -290,7 +290,8 @@ func (m *Rx[R]) Table() string {
 
 /*
 Data returns the slice of structs, passed to [NewRx] or selected from the
-database. It may return nil if no rows were passed to [NewRx].
+database. It may return nil if no rows were passed to [NewRx] and no [Select]
+or [Get] was executed.
 */
 func (m *Rx[R]) Data() []R {
 	return m.data
@@ -382,37 +383,9 @@ func (m *Rx[R]) Insert() (sql.Result, error) {
 }
 
 func (m *Rx[R]) renderInsertQuery() string {
-	// TODO: Think of caching noAutoColumns (and use go:generate for all metadata)
-	noAutoColumns := make([]string, 0, len(m.Columns())-1)
-	names := fieldsMap[R]().Names
-
-	for _, col := range m.Columns() {
-		colObj, exists := names[col]
-		// if this col does not exist in the names fieldsMap,this will mean,
-		// that CamelToSnake and SnakeToCamel contradict for this very case.
-		// Quick-fix: 1. If possible, change the sql table column name and
-		// rerun the migration to generate correspond field for the structure.
-		// or modify the struct field accordingly, or add a tag to the struct
-		// field.
-		if !exists {
-			Logger.Warnf(`column %s not found in fieldsMap. This may lead to panic!`, col)
-			noAutoColumns = append(noAutoColumns, col)
-			continue
-		}
-
-		// insert column named ID but with tag option no_auto: `rx:"id,no_auto"`
-		if _, isNoAuto := colObj.Options[`no_auto`]; col == `id` && isNoAuto {
-			continue
-		}
-		// do not insert collumns with tag `auto`
-		if _, ok := colObj.Options[`auto`]; ok {
-			continue
-		}
-		noAutoColumns = append(noAutoColumns, col)
-	}
+	noAutoColumns := m.noAutoColumns()
 	placeholders := strings.Join(noAutoColumns, ",:") // :login_name,:changed_by...
 	placeholders = sprintf("(:%s)", placeholders)
-	// END TODO
 	stash := map[string]any{
 		`columns`: strings.Join(noAutoColumns, ","),
 		`table`:   m.Table(),
@@ -422,6 +395,35 @@ func (m *Rx[R]) renderInsertQuery() string {
 	}
 	query := RenderSQLTemplate(`INSERT`, stash)
 	return query
+}
+
+/*
+noAutoColumns returns the columns that are not tagged `auto` and are not the
+`id` column (which is always auto-incremented unless tagged `no_auto`).
+*/
+func (m *Rx[R]) noAutoColumns() []string {
+	cols := make([]string, 0, len(m.Columns())-1)
+	names := fieldsMap[R]().Names
+
+	for _, col := range m.Columns() {
+		colObj, exists := names[col]
+		if !exists {
+			Logger.Warnf(`column %s not found in fieldsMap. This may lead to panic!`, col)
+			cols = append(cols, col)
+			continue
+		}
+
+		// insert column named ID but with tag option no_auto: `rx:"id,no_auto"`
+		if _, isNoAuto := colObj.Options[`no_auto`]; col == `id` && isNoAuto {
+			continue
+		}
+		// do not insert/update columns with tag `auto`
+		if _, ok := colObj.Options[`auto`]; ok {
+			continue
+		}
+		cols = append(cols, col)
+	}
+	return cols
 }
 
 /*
@@ -515,43 +517,31 @@ func namedInRebind(query string, bindData any) (string, []any, error) {
 
 /*
 Update constructs a Named UPDATE query, prepares it and executes it for each
-row of data in a transaction. It panics if there is no data to be updated.
+row of data. It panics if there is no data to be updated.
 
-We pass as bind parameters for each [sqlx.NamedStmt.Exec] each element
-of the slice of passed [Rowx] to [NewRx] or to [Rx.SetData].
-
-This is somehow problematic with named queries. What if we want to `SET
-group_id=1 WHERE group_id=2. How to differntiate between columns to be updated
-and parameters for the WHERE clause?  We need different name for the bind
-parameter. Something like `:where.group_id` to hold the existing value in the
-database. Or maybe use a nested select statement in the WHERE clause to match
-the needed row for update by primary key column. A solution is to have a nested
-structure in the passed record, used only as parameters for the query.
-We can enrich our structure, representing the database record with a `Where`
-field which is a structure and holds the current values. Look in the tests for
-an example of updating such an enriched record. Also we can use for our
-columns types like [sql.NullInt32] and such, provided by the [sql] package.
-
-`fields` is the list of columns to be updated - used to construct the `SET col
-= :col...` part of the query. If a field starts with UppercaseLetter it is
-converted to snake_case.
-
-For any case in which this method is not suitable, use directly sqlx.
+The expected workflow is: Get or Select rows, modify them, then call
+Update. *All non-auto columns are updated*. The WHERE clause is always
+`WHERE id = :id`, so each row in Data() must have its ID field populated.
+For more fine-grained updates use `&sqlx.DB` via [DB].
 */
-func (m *Rx[R]) Update(fields []string, where string) (sql.Result, error) {
+func (m *Rx[R]) Update() (sql.Result, error) {
 	if len(m.Data()) == 0 {
-		Logger.Panic("Cannot update, when no data is provided!")
+		if m.r == nilRowx[R]() {
+			Logger.Panic("Cannot update, when no data is provided!")
+		} else {
+			m.SetData([]R{*m.r})
+		}
+	} else if m.r != nilRowx[R]() && !reflect.DeepEqual(m.r, m.Data()[0]) {
+		// after a Get and a subsequent call to Update, we need to make sure,
+		// the .data[0] is equal to the updated m.r, because .data is going to
+		// be updated in database.
+		m.SetData([]R{*m.r})
 	}
-	var (
-		r sql.Result
-		e error
-	)
-
+	cols := m.noAutoColumns()
 	stash := map[string]any{
 		`table`: m.Table(),
-		// TODO: Prevent updating AutoFields in any case.
-		`SET`:   SQLForSET(fields),
-		`WHERE`: ifWhere(where),
+		`SET`:   SQLForSET(cols),
+		`WHERE`: `WHERE id = :id`,
 	}
 	query := RenderSQLTemplate(`UPDATE`, stash)
 	Logger.Debugf("Rendered UPDATE query : %s;", query)
@@ -560,6 +550,7 @@ func (m *Rx[R]) Update(fields []string, where string) (sql.Result, error) {
 		return nil, e
 	}
 	defer func() { _ = namedStmt.Close() }()
+	var r sql.Result
 	for _, row := range m.Data() {
 		Logger.Debugf("Update row: %+v;", row)
 		r, e = namedStmt.Exec(row)

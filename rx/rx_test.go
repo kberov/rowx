@@ -184,32 +184,18 @@ func TestTryEmbed(t *testing.T) {
 	rows, errAff = rs.LastInsertId()
 	reQ.NoError(errAff)
 	reQ.Equal(int64(7), rows)
-	// Update some rows - move some user(3) to another group(2).
-	ugDataUpd := []UserGroup{
-		UserGroup{
-			UserID: 3,
-			// new (to be updated in the database) value: 2
-			GroupID: 2, Where: whereParams{
-				// existing in the database value: 4
-				GroupID: 4,
-			},
-		},
-	}
-	ug.SetData(ugDataUpd)
-	//							set columns										WHERE struct
-	rs, err = ug.Update([]string{`group_id`}, `user_id=:user_id AND group_id=:where.group_id`)
+	// Delete some rows - remove user(3) from group(4) using Delete.
+	rs, err = ug.Delete(`user_id=:user_id AND group_id=:group_id`,
+		map[string]any{`user_id`: 3, `group_id`: 4})
 	reQ.NoError(err)
 	rows, errAff = rs.RowsAffected()
 	reQ.NoError(errAff)
 	reQ.Equal(int64(1), rows)
-	// Get the row to see what we did.
-	row, err := ug.Get(
+	// Get the row to see what we did - should not exist anymore.
+	_, err = ug.Get(
 		`user_id = :uid AND group_id = :gid`,
-		map[string]any{`uid`: 3, `gid`: ug.Data()[0].Where.GroupID})
-	if err != nil {
-		t.Logf(`err: %s`, err.Error())
-	}
-	t.Logf("Get updated row: %d|%d", row.UserID, row.GroupID)
+		map[string]any{`uid`: 3, `gid`: 4})
+	reQ.Error(err)
 	// Delete the inserted users, so the next tests pass. "ON DELETE
 	// CASCADE" will delete all the user_group rows. Also reset the sequence for
 	// AUTOINCREMENT for table users, to allow the primary key to start from 1.
@@ -443,63 +429,37 @@ func TestSelect(t *testing.T) {
 var testsForTestUpdate = []struct {
 	Rx          rx.SqlxModel[Users]
 	name        string
-	where       string
 	selectWhere string
 	selectBind  map[string]any
-	columns     []string
 	affected    int64
 	dbError     bool
 }{
 	{
 		name:        `One`,
-		where:       `id=:id`,
 		selectWhere: `id=:id`,
 		Rx: rx.NewRx(Users{LoginName: `first_updated`, ID: 1,
-			GroupID: sql.NullInt64{Valid: true, Int64: 0}}),
+			GroupID: sql.NullInt64{Valid: true, Int64: 0}, Passwword: `a`}),
 		affected:   1,
-		columns:    []string{`Login_name`},
 		selectBind: map[string]any{`id`: 1},
 		dbError:    false,
 	},
 	{
-		name: `ManyUniqueConstraintFail`,
-		// this WHERE clause will produce UNIQUE CONSTRAINT Error, because login_name is UNIQUE.
-		where:       `id IN(SELECT id FROM users WHERE ID>1)`,
-		selectWhere: `id IN(SELECT id FROM users WHERE ID>1)`,
+		name: `ManyOK`,
 		Rx: rx.NewRx(
-			Users{LoginName: `second_updated`, ID: 2},
-			Users{LoginName: `third_updated`, ID: 3, GroupID: sql.NullInt64{Valid: true, Int64: 2}},
-		),
-		affected: 0,
-		columns:  []string{`LoginName`, `group_id`},
-		dbError:  true,
-	},
-	{
-		name: `ManyUniqueConstraintOK`,
-		// this WHERE clause will NOT produce UNIQUE CONSTRAINT Error, because id is PRIMARY KEY.
-		where: `id = :id`,
-		Rx: rx.NewRx(
-			Users{LoginName: `second_updated_ok`, ID: 2, GroupID: sql.NullInt64{Valid: true, Int64: 2}},
-			Users{LoginName: `third_updated_ok`, ID: 3, GroupID: sql.NullInt64{Valid: true, Int64: 3}},
+			Users{LoginName: `second_updated_ok`, ID: 2, GroupID: sql.NullInt64{Valid: true, Int64: 2}, Passwword: `b`},
+			Users{LoginName: `third_updated_ok`, ID: 3, GroupID: sql.NullInt64{Valid: true, Int64: 3}, Passwword: `c`},
 		),
 		affected:    2,
-		columns:     []string{`login_name`, `GroupID`},
 		dbError:     false,
 		selectWhere: `id IN(:id)`,
 		selectBind:  map[string]any{`id`: []any{2, 3}},
 	},
 }
 
-//nolint:gocognit
 func TestUpdate(t *testing.T) {
-	for i, tc := range testsForTestUpdate {
+	for _, tc := range testsForTestUpdate {
 		t.Run(tc.name, func(t *testing.T) {
-			var (
-				r sql.Result
-				e error
-			)
-
-			r, e = tc.Rx.Update(tc.columns, tc.where)
+			r, e := tc.Rx.Update()
 			if e != nil && tc.dbError {
 				t.Logf("Error updating records: '%#v' was expected.", e)
 				return
@@ -507,8 +467,6 @@ func TestUpdate(t *testing.T) {
 				t.Errorf("Unexpected error: '%#v'!...", e)
 				return
 			}
-			// Strange how RowsAffected is always 1 even when it is obvious
-			// that two rows were affected.
 			rows, _ := r.RowsAffected()
 			t.Logf("*sql.Result.RowsAffected(): %d", rows)
 
@@ -520,14 +478,6 @@ func TestUpdate(t *testing.T) {
 			if data[0].LoginName != tc.Rx.Data()[0].LoginName {
 				t.Errorf(`Expected login_name to be %s, but it is %s!`,
 					tc.Rx.Data()[0].LoginName, data[0].LoginName)
-			}
-
-			if i == 1 {
-				groupID := tc.Rx.Data()[0].GroupID.Int64
-				if groupID != data[0].GroupID.Int64 {
-					t.Errorf("Expected group_id to be set to %#v! It was set to: %#v",
-						groupID, data[0].GroupID.Int64)
-				}
 			}
 			t.Logf("Updated records: %#v", data)
 		})
@@ -751,8 +701,7 @@ func TestPanics(t *testing.T) {
 		{
 			name: `UpdateNoData`,
 			fn: func() {
-				g := rx.NewRx[Groups]()
-				_, _ = g.Update(g.Columns(), `1`)
+				_, _ = rx.NewRx[Groups]().Update()
 			},
 		},
 		{
@@ -1024,48 +973,27 @@ func ExampleRx_Select() {
 }
 
 func ExampleRx_Update() {
-	type whereBind struct{ GroupID uint32 }
-	type UserGroup struct {
-		rx.Rx[UserGroup]
-		UserID  uint32
-		GroupID uint32
-		// Used only as bind parameters during UPDATE and maybe in other
-		// queries. Must be a named struct, known at compile time!
-		Where whereBind `rx:"where,-"` // - : Do not treat this field as column.
+	// Get a single row, modify it, and update.
+	m := rx.NewRx[Users]()
+	user, err := m.Get(`id=:id`, map[string]any{`id`: 1})
+	if err != nil {
+		fmt.Println("Error getting user:", err.Error())
+		return
 	}
-	// rx.Rx can be embedded and used from within your record structure or
-	// specialized type.
-	ug := new(UserGroup)
-	ugData := []UserGroup{
-		UserGroup{UserID: 4, GroupID: 4},
-		UserGroup{UserID: 5, GroupID: 5},
-	}
-	ug.SetData(ugData)
-	_, e := ug.Insert()
-	if e != nil {
-		fmt.Println("Error inserting into user_group:", e.Error())
-	}
-
-	// Update one or many rows - move some user(5) to another group(4).
-	ugDataUpd := []UserGroup{
-		UserGroup{
-			UserID: 5,
-			// new value (to be updated in the database). Current value: 5
-			GroupID: 4,
-			Where: whereBind{
-				// existing in the database value: 5
-				GroupID: 5,
-			},
-		},
-	}
-	ug.SetData(ugDataUpd)
-	//                    columns to be set                             the Where.GroupID field
-	rs, err := ug.Update([]string{`group_id`}, `user_id=:user_id AND group_id=:where.group_id`)
+	originalName := user.LoginName
+	user.LoginName = `first_example_updated`
+	rs, err := m.Update()
 	if err != nil {
 		fmt.Println(err.Error())
+		return
 	}
 	affected, _ := rs.RowsAffected()
-	fmt.Printf("RowsAffected: %d; err: %+v", affected, err)
+	fmt.Printf("RowsAffected: %d; err: %+v\n", affected, err)
+
+	// Restore original value for subsequent tests.
+	user.LoginName = originalName
+	// m.SetData([]Users{*user})
+	_, _ = m.Update()
 
 	// Output:
 	// RowsAffected: 1; err: <nil>

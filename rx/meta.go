@@ -47,10 +47,12 @@ type SqlxInserter[R Rowx] interface {
 
 /*
 SqlxUpdater can be implemented to update records in a table. It is fully
-implemented by [Rx].
+implemented by [Rx]. The expected workflow is: Get/Select rows, modify
+them, SetData, then call Update. Update uses the primary key column `id`
+to identify rows and updates all non-auto columns.
 */
 type SqlxUpdater[R Rowx] interface {
-	Update(fields []string, where string) (sql.Result, error)
+	Update() (sql.Result, error)
 }
 
 /*
