@@ -992,8 +992,7 @@ func ExampleRx_Update() {
 
 	// Restore original value for subsequent tests.
 	user.LoginName = originalName
-	// m.SetData([]Users{*user})
-	_, _ = m.Update()
+	_, _ = m.Update(`login_name`)
 
 	// Output:
 	// RowsAffected: 1; err: <nil>

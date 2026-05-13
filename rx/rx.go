@@ -519,12 +519,12 @@ func namedInRebind(query string, bindData any) (string, []any, error) {
 Update constructs a Named UPDATE query, prepares it and executes it for each
 row of data. It panics if there is no data to be updated.
 
-The expected workflow is: Get or Select rows, modify them, then call
-Update. *All non-auto columns are updated*. The WHERE clause is always
-`WHERE id = :id`, so each row in Data() must have its ID field populated.
-For more fine-grained updates use `&sqlx.DB` via [DB].
+The expected workflow is: Get or Select rows, modify them, then call Update.
+*All non-`auto` columns are updated* if no column names are passed. The WHERE clause
+is always `WHERE id = :id`, so each row in Data() must have its ID field
+populated. For updating tables without an `id` column, use `&sqlx.DB` via [DB].
 */
-func (m *Rx[R]) Update() (sql.Result, error) {
+func (m *Rx[R]) Update(columnNames ...string) (sql.Result, error) {
 	if len(m.Data()) == 0 {
 		if m.r == nilRowx[R]() {
 			Logger.Panic("Cannot update, when no data is provided!")
@@ -537,10 +537,13 @@ func (m *Rx[R]) Update() (sql.Result, error) {
 		// be updated in database.
 		m.SetData([]R{*m.r})
 	}
-	cols := m.noAutoColumns()
-	stash := map[string]any{
+	// All non-auto columns are updated.
+	if len(columnNames) == 0 {
+		columnNames = m.noAutoColumns()
+	}
+	stash := Map{
 		`table`: m.Table(),
-		`SET`:   SQLForSET(cols),
+		`SET`:   SQLForSET(columnNames),
 		`WHERE`: `WHERE id = :id`,
 	}
 	query := RenderSQLTemplate(`UPDATE`, stash)
