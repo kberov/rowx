@@ -36,14 +36,16 @@ CREATE TABLE IF NOT EXISTS ${table} (
 )`,
 		`SELECT_TABLE_INFO_sqlite3`: `
 SELECT t.name AS table_name, c.cid as c_id, c.name AS c_name,
-c.type as c_type, c."notnull" as not_null, c.dflt_value as default_value, c.pk as pk
+c.type as c_type, c."notnull" as not_null, c.dflt_value as default_value,
+c.pk as pk, t.type AS t_type
 -- TODO: Parse CHECK constraints(and later maybe foreign keys) from t.sql
 -- , t.sql
 FROM sqlite_master t, pragma_table_info(t.name) c
 WHERE (
 	-- We replace the ${and_t_name_in} with an IN clause with comma separated
 	-- list of table names for which structures will be generated in Go.
-	t.type='table' AND t.name NOT LIKE 'sqlite%' ${and_t_name_in} AND t.name !=?)
+	t.type IN('` + string(tableT) + `','` + string(viewT) + `')
+	AND t.name NOT LIKE 'sqlite%' ${and_t_name_in} AND t.name !=?)
 ORDER BY table_name, c_id;
 `,
 	}

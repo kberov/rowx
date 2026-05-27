@@ -20,16 +20,23 @@ Rx to get automatically its implementation and override some of its
 methods.
 */
 type SqlxModel[R Rowx] interface {
-	Data() []R
+	SqlxViewer[R]
 	SetData(data []R) (rx SqlxModel[R])
 	SqlxDeleter[R]
-	SqlxGetter[R]
 	SqlxInserter[R]
-	SqlxMeta[R]
-	SqlxSelector[R]
 	SqlxUpdater[R]
 	Tx() *sqlx.Tx
 	WithTx(queryer *sqlx.Tx) SqlxModel[R]
+}
+
+/*
+SqlxViewer is an interface for views. It is the "read-only" subset of [SqlxModel].
+*/
+type SqlxViewer[R Rowx] interface {
+	SqlxMeta[R]
+	Data() []R
+	SqlxGetter[R]
+	SqlxSelector[R]
 }
 
 /*
@@ -84,9 +91,9 @@ type SqlxDeleter[R Rowx] interface {
 }
 
 /*
-SqlxMeta can be implemented to return the name of the table in the database for
-the implementing type and the slice with its column names. It is fully
-implemented by [Rx].
+SqlxMeta can be implemented to return the name of the table (or view) in the
+database for the implementing type and the slice with its column names. It is
+fully implemented by [Rx].
 
 If you implement this interface for a struct, its methods will be called by
 [Rx] everywhere where table name or a slice of columns are needed. You can even

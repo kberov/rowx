@@ -306,20 +306,20 @@ func parseMigrationHeader(line string) (version, direction string) {
 }
 
 /*
-Generate generates structures for tables, found in database, pointed to by
-`dsn` and dumps them to a given `packagePath` directory. Returns an error if
-unsuccessful at any point of the execution. The name of the last directory in
-the path is used as package name. The directory must exist already.
+Generate generates structures for tables and views, found in database, pointed
+to by `dsn` and dumps them to a given `packagePath` directory. Returns an error
+if unsuccessful at any point of the execution. The name of the last directory
+in the path is used as package name. The directory must exist already.
 
-`tables` is expected to contain comma-separated tablenames, for which
-structures will be generated. If `tables` is an empty string, structures for
-all tables in the database are generated.
+`tables` is expected to contain comma-separated table-names and view-names, for
+which structures will be generated. If `tables` is an empty string, structures
+for all tables and views in the database are generated.
 
-Two files are created. The first only declares the package and can be modified
+Two files are created. The first only declares the package and can be edited
 by the programmer. It will not be regenerated on subsequent runs. The second
-contains all the structures, mapped to tables. It will be regenerated again on
-the next run of this function to re-map the potentially migrated to a new state
-schema to Go structs.
+contains all the structures, mapped to rows in tables and views. It will be
+regenerated again on the next run of this function to re-map the potentially
+migrated to a new state schema to Go structs.
 */
 func Generate(dsn string, packagePath string, tables string) error {
 	DSN = dsn
@@ -438,14 +438,14 @@ func preparePackageHeaderForGeneratedStructs(packagePath string, fileString *str
 
 var structTemplate = `
 
-// New${TableName} is a constructor for rx.SqlxModel[${TableName}].
-func New${TableName}(rows...${TableName}) rx.SqlxModel[${TableName}] {
+// New${TableName} is a constructor for rx.Sqlx${iface}[${TableName}].
+func New${TableName}(rows...${TableName}) rx.Sqlx${iface}[${TableName}] {
 	return rx.NewRx[${TableName}](rows...)
 }
 
-var _ rx.SqlxModel[${TableName}] = New${TableName}()
+var _ rx.Sqlx${iface}[${TableName}] = New${TableName}()
 
-// ${TableName} is an object, mapped to table ${table_name}. It implements the
+// ${TableName} is an object, mapped to ${ttype} ${table_name}. It implements the
 // SqlxMeta interface. 
 type ${TableName} struct {
 ${fields}
@@ -466,11 +466,19 @@ func (u *${TableName}) Columns() []string {
 func appendRowToLastStructTemplate(structsStashes *[]Map, i int, columns []columnInfo) {
 	last := 0
 	columnName := "\n\t\t\"" + columns[i].CName + `",`
+	tType := tableT
+	iface := `Model`
+	if columns[i].TType != tType {
+		tType = columns[i].TType
+		iface = `Viewer`
+	}
 	if i == 0 {
 		fieldsWithGoTypes := make([]fieldWithGoType, 0, 10)
 		// SA4006: this value of structsStashes is never used (staticcheck)
 		//nolint:staticcheck
 		*structsStashes = append(*structsStashes, Map{
+			`ttype`:             string(tType),
+			`iface`:             iface,
 			`TableName`:         SnakeToCamel(columns[i].TableName),
 			`table_name`:        columns[i].TableName,
 			`fieldsWithGoTypes`: &fieldsWithGoTypes,
@@ -489,6 +497,8 @@ func appendRowToLastStructTemplate(structsStashes *[]Map, i int, columns []colum
 		// SA4006: this value of structsStashes is never used (staticcheck)
 		//nolint:staticcheck
 		*structsStashes = append(*structsStashes, Map{
+			`ttype`:             string(tType),
+			`iface`:             iface,
 			`TableName`:         SnakeToCamel(columns[i].TableName),
 			`table_name`:        columns[i].TableName,
 			`fieldsWithGoTypes`: &fieldsWithGoTypes,
@@ -578,7 +588,9 @@ func sql2IfNullableGoType(column columnInfo, defaultType string) string {
 	if column.PK > 0 {
 		return defaultType
 	}
-	if column.NotNull {
+	// If this is view we can sfely have defaultType to not have to write more
+	// code (or think how to) display the values.
+	if column.NotNull || column.TType == viewT {
 		return defaultType
 	}
 	return "sql.Null[" + defaultType + "]"
@@ -597,12 +609,21 @@ func prepareGeneratedStructs(columns []columnInfo, fileString *strings.Builder) 
 	}
 }
 
+type tableType string
+
+const (
+	tableT tableType = `table`
+	viewT  tableType = `view`
+)
+
 type columnInfo struct {
 	SQL       string `rx:"sql"`
 	TableName string
 	CName     string
 	// CType sql.ColumnType
-	CType        string
+	CType string
+	// TType t.type IN('table','view')
+	TType        tableType
 	DefaultValue sql.NullString
 	CID          uint8
 	PK           uint8
